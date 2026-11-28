@@ -481,15 +481,47 @@ function mapInstructionProse(
   update: (line: string, offset: number) => string,
 ): string {
   const tree = fromMarkdown(section);
+  type LineKind = 'prose' | 'list' | 'quote';
+  type MarkdownNode = typeof tree | (typeof tree.children)[number];
+  const lines = new Map<number, LineKind>();
+  function allowParagraph(node: MarkdownNode, kind: LineKind): void {
+    const position = node.position;
+    if (!position) return;
+    const last = kind === 'list' ? position.start.line : position.end.line;
+    for (let n = position.start.line; n <= last; n++) lines.set(n, kind);
+  }
+  // Generated examples are ordinary paragraphs, top-level list-item openings
+  // or explicitly marked introductory quotes. Lazy continuations of a custom
+  // list or quotation retain that container even when their source has no marker.
+  for (const block of tree.children) {
+    if (block.type === 'paragraph') allowParagraph(block, 'prose');
+    if (block.type === 'blockquote') {
+      for (const child of block.children) {
+        if (child.type === 'paragraph') allowParagraph(child, 'quote');
+      }
+    }
+    if (block.type === 'list') {
+      for (const item of block.children) {
+        const first = item.children[0];
+        if (
+          first?.type === 'paragraph' &&
+          first.position?.start.line === item.position?.start.line
+        ) {
+          allowParagraph(first, 'list');
+        }
+      }
+    }
+  }
+
   const literals: { start: number; end: number }[] = [];
-  function collectLiterals(node: typeof tree | (typeof tree.children)[number]): void {
+  function collectLiterals(node: MarkdownNode, inline = false): void {
     const position = node.position;
     if (
       position?.start.offset !== undefined &&
       position.end.offset !== undefined &&
       (node.type === 'code' ||
         node.type === 'html' ||
-        (node.type === 'inlineCode' && position.start.line !== position.end.line))
+        (inline && node.type !== 'text' && position.start.line !== position.end.line))
     ) {
       // Ordinary one-line code spans contain the stock MCP example itself.
       let end = position.end.offset;
@@ -504,20 +536,33 @@ function mapInstructionProse(
       }
       literals.push({ start: position.start.offset, end });
     } else if ('children' in node) {
-      node.children.forEach(collectLiterals);
+      for (const child of node.children)
+        collectLiterals(child, inline || node.type === 'paragraph');
     }
   }
   collectLiterals(tree);
 
   let next = 0;
-  return section.replace(/[^\r\n]+/g, (line, offset: number) => {
-    while (next < literals.length && literals[next].end <= offset) next++;
-    const literal = literals[next];
-    if (!literal || literal.start >= offset + line.length) return update(line, offset);
-    // A fragment after a literal on this line is never the start of a stock instruction.
-    const end = Math.max(0, literal.start - offset);
-    return end ? update(line.slice(0, end), offset) + line.slice(end) : line;
-  });
+  let row = 0;
+  return section.replace(
+    /([^\r\n]*)(\r\n|[\r\n]|$)/g,
+    (source, line: string, eol: string, offset: number) => {
+      const kind = lines.get(++row);
+      if (
+        !line ||
+        !kind ||
+        (kind === 'quote' && !line.startsWith('> ')) ||
+        (kind === 'list' && !line.startsWith('- '))
+      )
+        return source;
+      while (next < literals.length && literals[next].end <= offset) next++;
+      const literal = literals[next];
+      if (!literal || literal.start >= offset + line.length) return update(line, offset) + eol;
+      // A fragment after a literal on this line is never the start of a stock instruction.
+      const end = Math.max(0, literal.start - offset);
+      return end ? update(line.slice(0, end), offset) + line.slice(end) + eol : source;
+    },
+  );
 }
 
 /** The counts can wrap; match their original spelling starting at the first live header. */

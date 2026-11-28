@@ -206,6 +206,73 @@ describe('kept instruction ownership', () => {
     );
   });
 
+  const archivedParagraphs = [
+    ['lazy quotation', (line: string) => '> Archived example:\n' + line],
+    ['lazy list item', (line: string) => '- Archived example:\n' + line],
+    ['nested quotation', (line: string) => '> > Archived example:\n' + line],
+    ['setext heading', (line: string) => line + '\n===='],
+    [
+      'multiline link label',
+      (line: string) => 'See [the archived\n' + line + '\nexample](./notes).',
+    ],
+    ['multiline emphasis', (line: string) => 'An *archived\n' + line + '\nexample*.'],
+  ] as const;
+
+  it.each(archivedParagraphs)(
+    'keeps the header and sibling selector inside a %s on rename',
+    async (_name, archive) => {
+      const hidden = archive('Indexed as **Sibling**.');
+      const call = (repo: string) =>
+        '- For security review, `explain({target: "fileOrSymbol", repo: "' +
+        repo +
+        '"})` lists taint findings.';
+      await withKeptInstructions(
+        [hidden, 'Indexed as **Old**.', call('Sibling'), call('Old')].join('\n\n'),
+        async (directory, file) => {
+          await generateAIContextFiles(
+            directory,
+            path.join(directory, '.gitnexus'),
+            'New',
+            {},
+            undefined,
+            { noStats: true, skipSkills: true, instructionFile: 'AGENTS.md' },
+          );
+          const actual = await fs.readFile(file, 'utf8');
+          expect(actual).toContain(hidden);
+          expect(actual).toContain('Indexed as **New**.');
+          expect(actual).toContain(call('Sibling'));
+          expect(actual).toContain(call('<path>'));
+        },
+      );
+    },
+  );
+
+  it.each(archivedParagraphs)(
+    'refreshes the live branch following a %s',
+    async (_name, archive) => {
+      const hidden = archive(keptReview('sample', 'Sibling'));
+      const live = keptReview('main', 'Old');
+      await withKeptInstructions(
+        ['Indexed as **Old**.', hidden, live].join('\n\n'),
+        async (directory, file) => {
+          const before = await fs.readFile(file, 'utf8');
+          await refreshBaseRefLine(directory, 'develop', { instructionFile: 'AGENTS.md' });
+          const expected = before
+            .replace(
+              '<!-- gitnexus:start -->\n',
+              '<!-- gitnexus:start -->\n' + checkoutGuidance + '\n',
+            )
+            .replace(live, keptReview('develop', '<path>'));
+          expect(await fs.readFile(file, 'utf8')).toBe(expected);
+          expect(
+            (await refreshBaseRefLine(directory, 'develop', { instructionFile: 'AGENTS.md' }))
+              .files,
+          ).toEqual([]);
+        },
+      );
+    },
+  );
+
   it('updates only the live kept header and its stock calls on a full refresh', async () => {
     const hidden = '~~~~md\n' + keptSnippet + '\n~~~~';
     const liveHeader = 'Indexed as **OldAlias** (2 symbols,\n3 relationships, 1 execution flows).';

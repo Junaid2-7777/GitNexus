@@ -716,6 +716,73 @@ Resources: gitnexus://repo/TestProject/context
     expect(result).toContain('Some project docs here.');
   });
 
+  it('refreshes only generated MCP selectors in kept blocks after a registry rename', async () => {
+    const previousName = 'workspace "$& `dev`"';
+    const currentName = 'workspace "$& `release`"';
+    const previousRepo = '"workspace \\"$& \\u0060dev\\u0060\\""';
+    const currentRepo = '"workspace \\"$& \\u0060release\\u0060\\""';
+    const options = { hasPdg: true, skipSkills: true };
+    const stats = { nodes: 7, edges: 3, processes: 1 };
+    const oldBlock = generateGitNexusContent(previousName, stats, options);
+    const oldImpact = `impact({target: "symbolName", direction: "upstream", repo: ${previousRepo}})`;
+    const fencedExample = [
+      '~~~markdown',
+      `- **MUST run impact before code/config/test edits.** Use \`${oldImpact}\` here.`,
+      '~~~',
+    ].join('\n');
+    const localNote = `Our old automation used \`${oldImpact}\`.`;
+    const legacyIntroduction = '> For repo-scoped MCP calls, pass `repo: ' + previousRepo + '`.';
+    const keptBlock = oldBlock
+      .replace('<!-- gitnexus:start -->', '<!-- gitnexus:start -->\n<!-- gitnexus:keep -->')
+      .replace('## Always Do', () => `${legacyIntroduction}\n\n## Always Do`)
+      .replace('## Never Do', () => `${localNote}\n\n${fencedExample}\n\n## Never Do`);
+
+    for (const [name, eol] of [
+      ['AGENTS.md', '\n'],
+      ['CLAUDE.md', '\r\n'],
+    ] as const) {
+      const file = path.join(tmpDir, name);
+      await fs.writeFile(file, `${localNote}\n\n${keptBlock}\n`.replaceAll('\n', eol));
+    }
+
+    await generateAIContextFiles(tmpDir, storagePath, currentName, stats, undefined, options);
+    const generatedCalls = [
+      `impact({target: "symbolName", direction: "upstream", repo: ${currentRepo}})`,
+      `detect_changes({scope: "all", repo: ${currentRepo}})`,
+      `detect_changes({scope: "compare", base_ref: "<merge-base SHA>", repo: ${currentRepo}})`,
+      `query({search_query: "concept", repo: ${currentRepo}})`,
+      `context({name: "symbolName", repo: ${currentRepo}})`,
+      `explain({target: "fileOrSymbol", repo: ${currentRepo}})`,
+      `pdg_query({mode: "controls", target: "fileOrSymbol", repo: ${currentRepo}})`,
+      `pdg_query({mode: "flows", target, variable, repo: ${currentRepo}})`,
+    ];
+    for (const [name, eol] of [
+      ['AGENTS.md', '\n'],
+      ['CLAUDE.md', '\r\n'],
+    ] as const) {
+      const content = await fs.readFile(path.join(tmpDir, name), 'utf8');
+      expect(content).toContain(
+        `**${currentName}** (7 symbols, 3 relationships, 1 execution flows)`,
+      );
+      for (const call of generatedCalls) expect(content).toContain('`' + call + '`');
+      expect(content).toContain('> For repo-scoped MCP calls, pass `repo: ' + currentRepo + '`.');
+      expect(content).toContain(`${localNote}${eol}${eol}${fencedExample.replaceAll('\n', eol)}`);
+      expect(content.startsWith(`${localNote}${eol}${eol}`)).toBe(true);
+      expect(content.split(previousRepo)).toHaveLength(4); // Only the three user-written calls.
+    }
+
+    const repeated = await generateAIContextFiles(
+      tmpDir,
+      storagePath,
+      currentName,
+      stats,
+      undefined,
+      options,
+    );
+    expect(repeated.files).toContain('AGENTS.md (preserved)');
+    expect(repeated.files).toContain('CLAUDE.md (preserved)');
+  });
+
   it('replaces section when no keep marker is present', async () => {
     const agentsPath = path.join(tmpDir, 'AGENTS.md');
 

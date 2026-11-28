@@ -184,6 +184,10 @@ function retainedCommunitySkillRows(section: string, noStats?: boolean): string 
     .join('\n');
 }
 
+function quoteMcpRepo(repo: string): string {
+  return JSON.stringify(repo).replace(/`/g, '\\u0060');
+}
+
 export function generateGitNexusContent(
   projectName: string,
   stats: RepoStats,
@@ -230,7 +234,7 @@ ${tableBody}`
   // stay under the CLAUDE.md block token budget (#856); the cli skill carries the
   // full bootstrap + npm-11 fallback (`node.target is null` npx install crash).
   const runner = `node ${runnerPath}`;
-  const mcpRepo = JSON.stringify(projectName).replace(/`/g, '\\u0060');
+  const mcpRepo = quoteMcpRepo(projectName);
   // Bootstrap names every install-free one-shot rather than the one this machine
   // resolves to: the block is committed, so a host-specific command would make
   // two contributors on different package managers rewrite it at each other on
@@ -439,6 +443,75 @@ function stripVolatileCounts(section: string): string {
     .replace(/ \(\d+ symbols\)/g, ' (<count>)');
 }
 
+const REPO_INTRO = '> For repo-scoped MCP calls, pass `repo: ';
+const GENERATED_MCP_EXAMPLES = [
+  [
+    '- **MUST run impact before code/config/test edits.** Use `impact(',
+    ['`impact({target: "symbolName", direction: "upstream", '],
+  ],
+  [
+    '- **MUST analyze changes before commit.** Run `detect_changes(',
+    [
+      '`detect_changes({scope: "all", ',
+      'pass that SHA to `detect_changes({scope: "compare", base_ref: "<merge-base SHA>", ',
+    ],
+  ],
+  [
+    '- **MUST use `query(',
+    ['`query({search_query: "concept", ', 'for concepts/flows, `context({name: "symbolName", '],
+  ],
+  ['- For security review, `explain(', ['`explain({target: "fileOrSymbol", ']],
+  ['- `explain(', ['`explain({target: "fileOrSymbol", ']],
+  [
+    '- For control/data dependence, `pdg_query(',
+    [
+      '`pdg_query({mode: "controls", target: "fileOrSymbol", ',
+      'and `pdg_query({mode: "flows", target, variable, ',
+    ],
+  ],
+] as const;
+
+/** Update selectors in stock examples without replacing the surrounding kept block. */
+function refreshKeptMcpSelectors(section: string, oldRepo: string, newRepo: string): string {
+  if (oldRepo === newRepo) return section;
+  let fence: string | undefined;
+  let inComment = false;
+  return section
+    .split('\n')
+    .map((line) => {
+      const marker = FENCE_OPENER.exec(line);
+      if (fence) {
+        if (
+          marker?.[1] === '' &&
+          marker[2][0] === fence[0] &&
+          marker[2].length >= fence.length &&
+          !marker[3].trim()
+        ) {
+          fence = undefined;
+        }
+        return line;
+      }
+      if (inComment || /^ {0,3}<!--/.test(line)) {
+        inComment = !line.includes('-->');
+        return line;
+      }
+      if (marker?.[1] === '' && (marker[2][0] !== '`' || !marker[3].includes('`'))) {
+        fence = marker[2];
+        return line;
+      }
+      if (line.startsWith(REPO_INTRO)) {
+        return line.replace(`${REPO_INTRO}${oldRepo}\`.`, () => `${REPO_INTRO}${newRepo}\`.`);
+      }
+      const example = GENERATED_MCP_EXAMPLES.find(([prefix]) => line.startsWith(prefix));
+      if (!example) return line;
+      for (const args of example[1]) {
+        line = line.replace(`${args}repo: ${oldRepo}})\``, () => `${args}repo: ${newRepo}})\``);
+      }
+      return line;
+    })
+    .join('\n');
+}
+
 /**
  * Create or update GitNexus section in a file
  * - If file doesn't exist: create with GitNexus content
@@ -504,7 +577,7 @@ async function upsertGitNexusSection(
     );
 
     // If the existing section contains <!-- gitnexus:keep -->, preserve the user's
-    // custom layout and only update the stats line (node/edge/flow counts).
+    // custom layout while refreshing the stats line and generated MCP selectors.
     // This lets teams trim the verbose default template to a lean format without
     // having it overwritten on every `gitnexus analyze`.
     //
@@ -543,7 +616,11 @@ async function upsertGitNexusSection(
           noStats || customParenthetical
             ? `${statsPrefix} **${projectName}**`
             : `${statsPrefix} **${projectName}** (${newStatsInner})`;
-        const updatedSection = existingSection.replace(STATS_LINE_PATTERN, () => statsLine);
+        const updatedSection = refreshKeptMcpSelectors(
+          existingSection.replace(STATS_LINE_PATTERN, () => statsLine),
+          quoteMcpRepo(statsMatch[2].slice(2, -2)),
+          quoteMcpRepo(projectName),
+        );
         // Background refreshes preserve count-only changes in lean blocks (#2907).
         if (comparable(updatedSection) === comparable(existingSection)) {
           return repairLineEndings();

@@ -11,6 +11,8 @@ import {
 } from '../../src/cli/ai-context.js';
 import { _captureLogger } from '../../src/core/logger.js';
 
+const checkoutGuidance = "> MCP `<path>` is this checkout's absolute `list_repos` path.";
+
 describe('generateAIContextFiles', () => {
   let tmpDir: string;
   let storagePath: string;
@@ -187,7 +189,7 @@ describe('generateAIContextFiles', () => {
       for (const file of ['AGENTS.md', 'CLAUDE.md']) {
         const content = await fs.readFile(path.join(dir, file), 'utf-8');
         expect(content).toContain(
-          'impact({target: "symbolName", direction: "upstream", repo: "TransportFallback"})',
+          'impact({target: "symbolName", direction: "upstream", repo: "<path>"})',
         );
 
         // Issue #3976: pre-edit impact guidance must be scoped to code changes.
@@ -203,13 +205,13 @@ describe('generateAIContextFiles', () => {
         expect(content).toContain(
           'node .gitnexus/run.cjs impact "symbolName" --direction upstream --repo .',
         );
-        expect(content).toContain('detect_changes({scope: "all", repo: "TransportFallback"})');
+        expect(content).toContain('detect_changes({scope: "all", repo: "<path>"})');
         expect(content).toContain('node .gitnexus/run.cjs detect-changes --scope all --repo .');
         expect(content).toContain('target branch "develop"');
         expect(content).toContain('target branch "develop" from its remote');
         expect(content).toContain('compute its merge base with the reviewed HEAD');
         expect(content).toContain(
-          'detect_changes({scope: "compare", base_ref: "<merge-base SHA>", repo: "TransportFallback"})',
+          'detect_changes({scope: "compare", base_ref: "<merge-base SHA>", repo: "<path>"})',
         );
         expect(content).toContain('--scope compare --base-ref "<merge-base SHA>" --repo .');
         expect(content).toContain('Never substitute grep for graph analysis');
@@ -220,9 +222,9 @@ describe('generateAIContextFiles', () => {
     }
   });
 
-  it('routes generated MCP examples to the configured registry name (#1542)', async () => {
+  it('routes generated MCP examples to the local checkout path (#1542)', async () => {
     const repoName = 'workspace "$& `dev`"';
-    const repo = JSON.stringify(repoName).replace(/`/g, '\\u0060');
+    const repo = '"<path>"';
     await generateAIContextFiles(tmpDir, storagePath, repoName, {}, undefined, {
       hasPdg: true,
       skipSkills: true,
@@ -238,10 +240,11 @@ describe('generateAIContextFiles', () => {
       `pdg_query({mode: "controls", target: "fileOrSymbol", repo: ${repo}})`,
       `pdg_query({mode: "flows", target, variable, repo: ${repo}})`,
     ];
-    expect(JSON.parse(repo)).toBe(repoName);
 
     for (const file of ['AGENTS.md', 'CLAUDE.md']) {
       const content = await fs.readFile(path.join(tmpDir, file), 'utf8');
+      expect(content).toContain(checkoutGuidance);
+      expect(content).toContain(`indexed by GitNexus as **${repoName}**`);
       for (const call of expected) expect(content).toContain('`' + call + '`');
     }
 
@@ -260,9 +263,7 @@ describe('generateAIContextFiles', () => {
       const content = generateGitNexusContent('@team', {}, { hasPdg, skipSkills: true });
       expect(content).toContain('indexed by GitNexus as **@team**');
       expect(content).not.toContain('repo: "@team"');
-      expect(content.split('repo: "<absolute checkout path from list_repos>"')).toHaveLength(
-        hasPdg ? 9 : 7,
-      );
+      expect(content.split('repo: "<path>"')).toHaveLength(hasPdg ? 9 : 7);
     },
   );
 
@@ -271,7 +272,8 @@ describe('generateAIContextFiles', () => {
     const localNote = 'Our group configuration uses `repo: "@team"`.';
     const legacyBlock = source
       .replace('**OldAlias**', '**@team**')
-      .replaceAll('repo: "OldAlias"', 'repo: "@team"')
+      .replaceAll('repo: "<path>"', 'repo: "@team"')
+      .replace(`${checkoutGuidance}\n`, '')
       .replace(
         '<!-- gitnexus:start -->',
         `<!-- gitnexus:start -->\n<!-- gitnexus:keep -->\n${localNote}`,
@@ -284,14 +286,15 @@ describe('generateAIContextFiles', () => {
     expect(migrated).toContain('indexed by GitNexus as **@team**');
     expect(migrated).toContain(localNote);
     expect(migrated.split('repo: "@team"')).toHaveLength(2);
-    expect(migrated.split('repo: "<absolute checkout path from list_repos>"')).toHaveLength(7);
+    expect(migrated.split('repo: "<path>"')).toHaveLength(7);
 
     await generateAIContextFiles(tmpDir, storagePath, 'NewAlias', {});
     const renamed = await fs.readFile(file, 'utf8');
     expect(renamed).toContain('indexed by GitNexus as **NewAlias**');
     expect(renamed).toContain(localNote);
-    expect(renamed).not.toContain('<absolute checkout path from list_repos>');
-    expect(renamed.split('repo: "NewAlias"')).toHaveLength(7);
+    expect(renamed).toContain(checkoutGuidance);
+    expect(renamed.split('repo: "<path>"')).toHaveLength(7);
+    expect(renamed.split('repo: "@team"')).toHaveLength(2);
   });
 
   it.each([true, false])('exempts docs-only edits when hasPdg=%s (#3976)', (hasPdg) => {
@@ -760,10 +763,12 @@ Resources: gitnexus://repo/TestProject/context
     const previousName = 'workspace "$& `dev`"';
     const currentName = 'workspace "$& `release`"';
     const previousRepo = '"workspace \\"$& \\u0060dev\\u0060\\""';
-    const currentRepo = '"workspace \\"$& \\u0060release\\u0060\\""';
+    const currentRepo = '"<path>"';
     const options = { hasPdg: true, skipSkills: true };
     const stats = { nodes: 7, edges: 3, processes: 1 };
-    const oldBlock = generateGitNexusContent(previousName, stats, options);
+    const oldBlock = generateGitNexusContent(previousName, stats, options)
+      .replaceAll('repo: "<path>"', () => `repo: ${previousRepo}`)
+      .replace(`${checkoutGuidance}\n`, '');
     const oldImpact = `impact({target: "symbolName", direction: "upstream", repo: ${previousRepo}})`;
     const fencedExample = [
       '~~~markdown',
@@ -805,7 +810,7 @@ Resources: gitnexus://repo/TestProject/context
         `**${currentName}** (7 symbols, 3 relationships, 1 execution flows)`,
       );
       for (const call of generatedCalls) expect(content).toContain('`' + call + '`');
-      expect(content).toContain('> For repo-scoped MCP calls, pass `repo: ' + currentRepo + '`.');
+      expect(content).toContain(checkoutGuidance);
       expect(content).toContain(`${localNote}${eol}${eol}${fencedExample.replaceAll('\n', eol)}`);
       expect(content.startsWith(`${localNote}${eol}${eol}`)).toBe(true);
       expect(content.split(previousRepo)).toHaveLength(4); // Only the three user-written calls.
@@ -848,7 +853,7 @@ Custom workflow still refers to \`repo: "${oldName}"\`.
         const output = await fs.readFile(path.join(tmpDir, file), 'utf8');
         expect(output).toContain(`Indexed as **${currentName}**. ${note}`);
         expect(output).toContain(
-          'impact({target: "symbolName", direction: "upstream", repo: "NewCanonicalRepo"})',
+          'impact({target: "symbolName", direction: "upstream", repo: "<path>"})',
         );
         expect(output).toContain(`Custom workflow still refers to \`repo: "${oldName}"\`.`);
       }
@@ -879,7 +884,8 @@ Custom migration example: \`context({name: "symbolName"})\`.
       for (const file of ['AGENTS.md', 'CLAUDE.md']) {
         const content = await fs.readFile(path.join(tmpDir, file), 'utf8');
         expect(content).toContain(`indexed by GitNexus as **${name}**.`);
-        expect(content.split(`repo: "${name}"`)).toHaveLength(9);
+        expect(content.split('repo: "<path>"')).toHaveLength(9);
+        expect(content).toContain(checkoutGuidance);
         expect(content).toContain('Custom migration example: `context({name: "symbolName"})`.');
       }
     },
@@ -1966,13 +1972,15 @@ Indexed as **placeholder** (1 symbols, 1 relationships, 1 execution flows). Cust
     // generated instructions must use the exact callable names or agents call a
     // tool that does not exist.
     expect(content).not.toMatch(/gitnexus_(impact|query|context|detect_changes|rename|cypher)/);
-    expect(content).toContain('impact({target: "symbolName", direction: "upstream", repo: "P"})');
-    expect(content).toContain('detect_changes({scope: "all", repo: "P"})');
+    expect(content).toContain(
+      'impact({target: "symbolName", direction: "upstream", repo: "<path>"})',
+    );
+    expect(content).toContain('detect_changes({scope: "all", repo: "<path>"})');
     // #2175: the generated guidance must advertise the renamed param, never the
     // legacy "query" key (Claude Code drops a tool arg named exactly "query").
-    expect(content).toContain('query({search_query: "concept", repo: "P"})');
+    expect(content).toContain('query({search_query: "concept", repo: "<path>"})');
     expect(content).not.toContain('query({query:');
-    expect(content).toContain('context({name: "symbolName", repo: "P"})');
+    expect(content).toContain('context({name: "symbolName", repo: "<path>"})');
   });
 
   it('JSON-escapes a markdown/quote-bearing branch so it cannot break the code span (#243)', () => {

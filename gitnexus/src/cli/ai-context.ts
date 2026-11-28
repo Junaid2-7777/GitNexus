@@ -186,17 +186,8 @@ function retainedCommunitySkillRows(section: string, noStats?: boolean): string 
     .join('\n');
 }
 
-function quoteMcpRepo(repo: string): string {
-  return JSON.stringify(repo).replace(/`/g, '\\u0060');
-}
-
-function generatedMcpRepo(projectName: string): string {
-  // `@` selects a cross-repo group for several MCP tools. The checkout path
-  // returned by list_repos selects the repo without baking a host path into docs.
-  return quoteMcpRepo(
-    projectName.startsWith('@') ? '<absolute checkout path from list_repos>' : projectName,
-  );
-}
+const MCP_REPO_SELECTOR = '"<path>"';
+const MCP_CHECKOUT_GUIDANCE = "> MCP `<path>` is this checkout's absolute `list_repos` path.";
 
 export function generateGitNexusContent(
   projectName: string,
@@ -244,7 +235,7 @@ ${tableBody}`
   // stay under the CLAUDE.md block token budget (#856); the cli skill carries the
   // full bootstrap + npm-11 fallback (`node.target is null` npx install crash).
   const runner = `node ${runnerPath}`;
-  const mcpRepo = generatedMcpRepo(projectName);
+  const mcpRepo = MCP_REPO_SELECTOR;
   // Bootstrap names every install-free one-shot rather than the one this machine
   // resolves to: the block is committed, so a host-specific command would make
   // two contributors on different package managers rewrite it at each other on
@@ -252,7 +243,7 @@ ${tableBody}`
   // bun-only machine has no npm, npx or pnpm at all, and the npx-only note left
   // it with a bootstrap command it could not run.
   const bootstrapNote =
-    'Missing runner? Use `npx`, `bunx`, or `pnpm dlx`: `bunx gitnexus@latest analyze` (#1939).';
+    'No runner? `npx`, `bunx`, or `pnpm dlx`: `bunx gitnexus@latest analyze` (#1939).';
 
   // This block is injected into every user's repo and its total size is capped
   // by test (ai-context.test.ts, #856) — a new bullet or clause has to be paid
@@ -272,6 +263,7 @@ This project is indexed by GitNexus as **${projectName}**${noStats ? '' : ` (${s
 
 > Index stale? Run \`${runner} analyze --index-only\`. ${bootstrapNote}
 > Check staleness.status and branch/lastCommit when present. Re-index only if behind or diverged.
+${MCP_CHECKOUT_GUIDANCE}
 
 ## Always Do
 
@@ -288,7 +280,7 @@ This project is indexed by GitNexus as **${projectName}**${noStats ? '' : ` (${s
       ? '\n- Spring Actuator runtime evidence is enabled. A Route is authoritative only when `runtimeConfirmed === true`; `runtimeSource` is provenance and may also describe conflicts. Snapshot values are never persisted.'
       : ''
   }
-- \`explain({target: "fileOrSymbol", repo: ${mcpRepo}})\` lists taint findings (source→sink flows; needs \`analyze --pdg\`).${
+- \`explain({target: "fileOrSymbol", repo: ${mcpRepo}})\` shows taint (source→sink; needs \`analyze --pdg\`).${
     hasPdg
       ? `\n- For control/data dependence, \`pdg_query({mode: "controls", target: "fileOrSymbol", repo: ${mcpRepo}})\` answers "under what condition does X run?" (CDG, incl. guard clauses) and \`pdg_query({mode: "flows", target, variable, repo: ${mcpRepo}})\` traces "where does variable Y flow?" (REACHING_DEF). \`--pdg\` layer.`
       : ''
@@ -305,7 +297,7 @@ This project is indexed by GitNexus as **${projectName}**${noStats ? '' : ` (${s
 
 | Resource | Use for |
 | --- | --- |
-| \`gitnexus://repo/${projectName}/context\` | Codebase overview, check index freshness |
+| \`gitnexus://repo/${projectName}/context\` | Overview and index freshness |
 | \`gitnexus://repo/${projectName}/clusters\` | All functional areas |
 | \`gitnexus://repo/${projectName}/processes\` | All execution flows |
 | \`gitnexus://repo/${projectName}/process/{name}\` | Step-by-step execution trace |
@@ -453,7 +445,8 @@ function stripVolatileCounts(section: string): string {
     .replace(/ \(\d+ symbols\)/g, ' (<count>)');
 }
 
-const REPO_INTRO = '> For repo-scoped MCP calls, pass `repo: ';
+const LEGACY_MCP_INTRO = /^> For repo-scoped MCP calls, pass `repo: "(?:[^"\\`]|\\.)*"`\./;
+const MCP_CALL_TAIL = /^(?:, repo: "(?:[^"\\`]|\\.)*")?\}\)`/;
 const GENERATED_MCP_EXAMPLES = [
   [
     '- **MUST run impact before code/config/test edits.** Use `impact(',
@@ -522,20 +515,35 @@ function mapInstructionProse(section: string, update: (line: string) => string):
   });
 }
 
-/** Update selectors in stock examples without replacing the surrounding kept block. */
-function refreshKeptMcpSelectors(section: string, oldRepo: string, newRepo: string): string {
+/** Upgrade stock examples without replacing the surrounding kept block. */
+function refreshKeptMcpSelectors(section: string): string {
+  let needsGuidance = true;
+  mapInstructionProse(section, (line) => {
+    if (line.startsWith(MCP_CHECKOUT_GUIDANCE) || LEGACY_MCP_INTRO.test(line)) {
+      needsGuidance = false;
+    }
+    return line;
+  });
+
   return mapInstructionProse(section, (line) => {
-    if (line.startsWith(REPO_INTRO)) {
-      return line.replace(`${REPO_INTRO}${oldRepo}\`.`, () => `${REPO_INTRO}${newRepo}\`.`);
+    if (LEGACY_MCP_INTRO.test(line)) {
+      return line.replace(LEGACY_MCP_INTRO, () => MCP_CHECKOUT_GUIDANCE);
     }
     const example = GENERATED_MCP_EXAMPLES.find(([prefix]) => line.startsWith(prefix));
     if (!example) return line;
+    let hasStockCall = false;
     for (const args of example[1]) {
-      const qualified = `${args}, repo: ${oldRepo}})\``;
-      const previous = line.includes(qualified) ? qualified : `${args}})\``;
-      line = line.replace(previous, () => `${args}, repo: ${newRepo}})\``);
+      const callStart = line.indexOf(args);
+      if (callStart < 0) continue;
+      const tailStart = callStart + args.length;
+      const tail = line.slice(tailStart).match(MCP_CALL_TAIL)?.[0];
+      if (tail === undefined) continue;
+      hasStockCall = true;
+      line = `${line.slice(0, tailStart)}, repo: ${MCP_REPO_SELECTOR}})\`${line.slice(tailStart + tail.length)}`;
     }
-    return line;
+    if (!hasStockCall || !needsGuidance) return line;
+    needsGuidance = false;
+    return `${MCP_CHECKOUT_GUIDANCE}\n\n${line}`;
   });
 }
 
@@ -654,6 +662,7 @@ async function upsertGitNexusSection(
       // --no-stats run still matches — letting the name refresh, and letting
       // counts return if --no-stats is later dropped.
       const statsMatch = existingSection.match(STATS_LINE_PATTERN);
+      let updatedSection = existingSection;
 
       if (statsMatch) {
         const statsPrefix = statsMatch[1];
@@ -664,34 +673,17 @@ async function upsertGitNexusSection(
           noStats || customParenthetical
             ? `${statsPrefix} **${projectName}**`
             : `${statsPrefix} **${projectName}** (${newStatsInner})`;
-        const previousName = statsMatch[2].slice(2, -2);
-        const nextSelector = generatedMcpRepo(projectName);
-        let updatedSection = refreshKeptMcpSelectors(
-          existingSection.replace(STATS_LINE_PATTERN, () => statsLine),
-          generatedMcpRepo(previousName),
-          nextSelector,
-        );
-        if (previousName.startsWith('@')) {
-          // Also migrate older generated blocks which embedded the raw group-like alias.
-          updatedSection = refreshKeptMcpSelectors(
-            updatedSection,
-            quoteMcpRepo(previousName),
-            nextSelector,
-          );
-        }
-        // Background refreshes preserve count-only changes in lean blocks (#2907).
-        if (comparable(updatedSection) === comparable(existingSection)) {
-          return repairLineEndings();
-        }
-        const before = existingContent.substring(0, startIdx);
-        const after = existingContent.substring(endIdx + GITNEXUS_END_MARKER.length);
-        await writeWithLineEnding(filePath, before + updatedSection + after, eol);
-        return 'updated';
+        updatedSection = existingSection.replace(STATS_LINE_PATTERN, () => statsLine);
       }
-      // Keep marker present but no stats line matched. Section is preserved
-      // unchanged on disk; return a distinct status so callers/CLI output
-      // don't mis-report this as 'updated' (which would imply a write).
-      return repairLineEndings();
+      updatedSection = refreshKeptMcpSelectors(updatedSection);
+      // Background refreshes preserve count-only changes in lean blocks (#2907).
+      if (comparable(updatedSection) === comparable(existingSection)) {
+        return repairLineEndings();
+      }
+      const before = existingContent.substring(0, startIdx);
+      const after = existingContent.substring(endIdx + GITNEXUS_END_MARKER.length);
+      await writeWithLineEnding(filePath, before + updatedSection + after, eol);
+      return 'updated';
     }
 
     // No keep marker — replace existing section with full verbose content,

@@ -8,6 +8,7 @@
  * the dispatch and error handling logic in isolation.
  */
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { generateGitNexusContent } from '../../src/cli/ai-context.js';
 import type { StalenessInfo } from '../../src/core/git-staleness.js';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import fsPromises from 'fs/promises';
@@ -4293,6 +4294,26 @@ describe('LocalBackend.resolveRepo', () => {
       cwdSpy.mockRestore();
     }
   });
+
+  it.each(['renamed-app', 'app'])(
+    'selects the intended checkout from generated MCP guidance when its local alias is %s',
+    async (localAlias) => {
+      const { dirA: checkout, entries } = makeSharedPrefixFixture(localAlias, 'app');
+      vi.mocked(listRegisteredRepos).mockResolvedValue(entries);
+      vi.mocked(getGitRoot).mockReturnValue(null);
+      const backend = new LocalBackend();
+      await backend.init();
+
+      const generated = generateGitNexusContent('app', {});
+      const literal = generated.match(/context\(\{name: "symbolName", repo: ("[^"\n]+")\}\)/)?.[1];
+      if (literal === undefined) throw new Error('Generated context example has no repo selector');
+      const selector = JSON.parse(literal);
+      const listed = (await backend.listRepos()).find((repo) => repo.path === checkout);
+      if (listed === undefined) throw new Error('The intended checkout is missing from list_repos');
+      const resolved = await backend.resolveRepo(selector === '<path>' ? listed.path : selector);
+      expect(resolved.repoPath).toBe(checkout);
+    },
+  );
 
   it('resolves repo by name parameter', async () => {
     setupMultipleRepos();

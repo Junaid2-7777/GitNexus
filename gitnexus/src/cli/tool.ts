@@ -18,7 +18,7 @@ import { resolveDetectChangesScope } from '../core/detect-changes-scope.js';
 
 import { writeSync } from 'node:fs';
 import { LocalBackend, VALID_NODE_LABELS } from '../mcp/local/local-backend.js';
-import { cliError, cliErrorKey, cliWarnKey } from './cli-message.js';
+import { cliErrorKey, cliWarnKey } from './cli-message.js';
 import { formatDetectChangesResult } from './detect-changes-format.js';
 import { IntegerOptionError, parseIntegerOption } from './int-option.js';
 import {
@@ -256,7 +256,9 @@ function parseToolDepth(raw: string | undefined): number | undefined {
     return parseIntegerOption(normalized, '--depth', { minimum: 1 });
   } catch (err) {
     if (!(err instanceof IntegerOptionError)) throw err;
-    cliError(err.message);
+    cliErrorKey(err.reason === 'too-large' ? 'tool.depth.tooLarge' : 'tool.depth.invalid', {
+      flag: err.flag,
+    });
     process.exit(1);
   }
 }

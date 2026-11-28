@@ -12,6 +12,7 @@ export class IntegerOptionError extends Error {
     readonly flag: string,
     readonly minimum: number,
     message: string,
+    readonly reason: 'invalid' | 'too-large' = 'invalid',
   ) {
     super(message);
     this.name = 'IntegerOptionError';
@@ -47,7 +48,7 @@ export function parseIntegerOption(
     throw new IntegerOptionError(flag, minimum, `${flag} ${requirement}`);
   }
   if (parsed > Math.floor(Number.MAX_SAFE_INTEGER / scale)) {
-    throw new IntegerOptionError(flag, minimum, `${flag} is too large`);
+    throw new IntegerOptionError(flag, minimum, `${flag} is too large`, 'too-large');
   }
   return parsed;
 }

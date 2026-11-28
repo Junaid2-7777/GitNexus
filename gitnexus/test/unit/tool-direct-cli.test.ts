@@ -418,6 +418,28 @@ describe('direct CLI tool commands', () => {
     expect(output).not.toContain('proc10');
   });
 
+  it.each([
+    { language: 'en', depth: '0', message: '--depth must be a positive integer' },
+    { language: 'en', depth: '9007199254740992', message: '--depth is too large' },
+    { language: 'zh-CN', depth: '0', message: '--depth 必须为正整数' },
+    { language: 'zh-CN', depth: '9007199254740992', message: '--depth 的值过大' },
+  ])('reports invalid trace depth $depth in $language', async ({ language, depth, message }) => {
+    vi.stubEnv('GITNEXUS_LANG', language);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit');
+    });
+    try {
+      const { traceCommand } = await import('../../src/cli/tool.js');
+      await expect(traceCommand('A', 'B', { depth })).rejects.toThrow('process.exit');
+      expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(stderr).toHaveBeenCalledWith(`${message}\n`);
+    } finally {
+      exit.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
   it('localizes detect_changes formatter labels for Simplified Chinese', async () => {
     vi.stubEnv('GITNEXUS_LANG', 'zh-CN');
     callToolMock.mockResolvedValue({

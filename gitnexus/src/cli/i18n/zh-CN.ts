@@ -122,6 +122,8 @@ export const zhCN = {
   'tool.usage.trace':
     '用法：gitnexus trace [起点] [终点] [-f|--file <路径>] [--from-file <路径>] [--to-file <路径>] [--from-uid <uid>] [--to-uid <uid>] [--depth <n>]',
   'tool.usage.cypher': '用法：gitnexus cypher <Cypher 查询>',
+  'tool.depth.invalid': '{{flag}} 必须为正整数',
+  'tool.depth.tooLarge': '{{flag}} 的值过大',
   'tool.warn.unknownKind':
     "--kind '{{kind}}' 不是已知的符号类型（如 Function、Class、Method），不会用于缩小结果范围。",
   'tool.detectChanges.noChanges': '未检测到变更。',

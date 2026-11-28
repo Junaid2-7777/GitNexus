@@ -594,7 +594,8 @@ function refreshKeptMcpSelectors(section: string, previousName: string | undefin
     }
     if (!hasStockCall || !needsGuidance) return line;
     needsGuidance = false;
-    return `${MCP_CHECKOUT_GUIDANCE}\n\n${line}`;
+    const eol = section.includes('\r\n') ? '\r\n' : '\n';
+    return [MCP_CHECKOUT_GUIDANCE, '', line].join(eol);
   });
 }
 
@@ -1082,11 +1083,9 @@ export async function generateAIContextFiles(
  * block — including community-skill rows written by a prior `--skills` run —
  * rather than regenerating (which would drop those rows on a no-`--skills` run).
  *
- * Legacy blocks that passed the branch tip as `base_ref` are migrated to the
- * merge-base guidance at the same time. Best-effort: missing files, a
- * missing/blank block, or a block with no generated regression sentence are
- * silently skipped. Writes
- * only when the value actually changes, so a routine up-to-date run is a no-op.
+ * Legacy branch-tip guidance and generated calls tied to a former checkout
+ * alias are migrated together. Missing files and unrecognized lines are
+ * skipped. A routine up-to-date run writes only when the instructions change.
  */
 export async function refreshBaseRefLine(
   repoPath: string,
@@ -1138,13 +1137,14 @@ export async function refreshBaseRefLine(
         () => `- ${regressionReviewGuidance(defaultBranch, undefined, reviewSelector())}`,
       ) ??
       block;
+    if (previousName !== undefined) newBlock = refreshKeptMcpSelectors(newBlock, previousName);
     if (migratedSelector && !hasCheckoutGuidance(newBlock)) {
       newBlock = newBlock.replace(
         /^(<!-- gitnexus:start -->)(\r?\n)/,
         (_match, marker, eol) => `${marker}${eol}${MCP_CHECKOUT_GUIDANCE}${eol}`,
       );
     }
-    if (newBlock === block) continue; // no base_ref line present, or already current
+    if (newBlock === block) continue;
     const newContent = content.substring(0, startIdx) + newBlock + content.substring(blockEnd);
     try {
       await fs.writeFile(filePath, newContent, 'utf-8');

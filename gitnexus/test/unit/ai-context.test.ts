@@ -150,6 +150,42 @@ describe('kept instruction ownership', () => {
     },
   );
 
+  it.each(['\n', '\r\n'])(
+    'migrates every visible stock selector on a warm checkout with %j',
+    async (eol) => {
+      const calls = (querySelector: string, contextSelector: string) =>
+        '- **MUST use `query({search_query: "concept", repo: "' +
+        querySelector +
+        '"})` for concepts/flows, `context({name: "symbolName", repo: "' +
+        contextSelector +
+        '"})` for a named symbol, or `impact` for blast radius.**';
+      const stock = calls('OldAlias', 'OldAlias');
+      const mixed = calls('@group', 'OldAlias');
+      const explicit = calls('/sibling', '@group');
+      const custom = ['Keep these samples:', '~~~md', stock, '~~~'].join('\n');
+      await withKeptInstructions(
+        ['Indexed as **OldAlias**.', custom, stock, mixed, explicit].join('\n\n'),
+        async (directory, file) => {
+          const input = (await fs.readFile(file, 'utf8')).replaceAll('\n', eol);
+          await fs.writeFile(file, input);
+          const expected = input
+            .replace(
+              eol + eol + stock + eol + eol,
+              eol + eol + checkoutGuidance + eol + eol + calls('<path>', '<path>') + eol + eol,
+            )
+            .replace(mixed, calls('@group', '<path>'));
+          await refreshBaseRefLine(directory, 'develop', { instructionFile: 'AGENTS.md' });
+          expect(await fs.readFile(file, 'utf8')).toBe(expected);
+          expect(
+            (await refreshBaseRefLine(directory, 'develop', { instructionFile: 'AGENTS.md' }))
+              .files,
+          ).toEqual([]);
+          expect(await fs.readFile(file, 'utf8')).toBe(expected);
+        },
+      );
+    },
+  );
+
   it('updates only the live kept header and its stock calls on a full refresh', async () => {
     const hidden = '~~~~md\n' + keptSnippet + '\n~~~~';
     const liveHeader = 'Indexed as **OldAlias** (2 symbols,\n3 relationships, 1 execution flows).';

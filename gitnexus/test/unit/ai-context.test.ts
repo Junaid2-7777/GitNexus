@@ -2054,6 +2054,53 @@ Before release, run \`detect_changes({scope: "compare", base_ref: "main"})\` and
     }
   });
 
+  it('refreshes the stock review sentence with its own selector and runner', async () => {
+    const options = { defaultBranch: 'main', runnerPath: '.external-index/run.cjs' };
+    const stock = generateGitNexusContent('IntendedCheckout', {}, options);
+    const stockLine =
+      stock.split('\n').find((line) => line.includes('fetch target branch "main"')) ?? '';
+    expect(stockLine).not.toBe('');
+    const retainedExamples = [
+      '<!-- gitnexus:keep -->',
+      '~~~markdown',
+      'pass that SHA to `detect_changes({scope: "compare", base_ref: "<merge-base SHA>", repo: "ForeignCheckout"})` or `node .foreign/run.cjs detect-changes --scope compare --base-ref "<merge-base SHA>" --repo .`.',
+      '> ~~~',
+      'For regression review, fetch target branch "still-fenced" from its remote; compute its merge base with the reviewed HEAD and pass that SHA to `detect_changes({scope: "compare", base_ref: "<merge-base SHA>", repo: "StillFencedCheckout"})`.',
+      '~~~',
+      '<!--',
+      'For regression review, fetch target branch "docs" from its remote; compute its merge base with the reviewed HEAD and pass that SHA to `detect_changes({scope: "compare", base_ref: "<merge-base SHA>", repo: "CommentCheckout"})`.',
+      '-->',
+      '> ~~~markdown',
+      '> For regression review, fetch target branch "quoted" from its remote; compute its merge base with the reviewed HEAD and pass that SHA to `detect_changes({scope: "compare", base_ref: "<merge-base SHA>", repo: "QuotedCheckout"})`.',
+      '> ~~~',
+      '- ~~~markdown',
+      '  For regression review: `detect_changes({scope: "compare", base_ref: "other"})`.',
+      '  ~~~',
+    ].join('\n');
+    const seed = stock.replace('## Always Do', () => `${retainedExamples}\n\n## Always Do`);
+    const expected = seed.replace(stockLine, () => stockLine.replace('"main"', '"develop"'));
+    for (const [file, eol] of [
+      ['AGENTS.md', '\n'],
+      ['CLAUDE.md', '\r\n'],
+    ] as const) {
+      await fs.writeFile(path.join(tmpDir, file), seed.replaceAll('\n', eol));
+    }
+
+    expect((await refreshBaseRefLine(tmpDir, 'develop')).files.sort()).toEqual([
+      'AGENTS.md',
+      'CLAUDE.md',
+    ]);
+    for (const [file, eol] of [
+      ['AGENTS.md', '\n'],
+      ['CLAUDE.md', '\r\n'],
+    ] as const) {
+      expect(await fs.readFile(path.join(tmpDir, file), 'utf8')).toBe(
+        expected.replaceAll('\n', eol),
+      );
+    }
+    expect((await refreshBaseRefLine(tmpDir, 'develop')).files).toEqual([]);
+  });
+
   it('refreshBaseRefLine updates current merge-base guidance idempotently (#3509)', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'gn-review-target-'));
     try {

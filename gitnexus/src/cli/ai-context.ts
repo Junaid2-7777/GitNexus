@@ -481,45 +481,82 @@ const GENERATED_MCP_EXAMPLES = [
   ],
 ] as const;
 
+/** Apply edits to prose lines, preserving fences, comments and original endings. */
+function mapInstructionProse(section: string, update: (line: string) => string): string {
+  let fence: { delimiter: string; quotes: number; inside?: RegExp } | undefined;
+  let inComment = false;
+  return section.replace(/[^\r\n]+/g, (line) => {
+    if (fence?.inside && line.trim() !== '' && !fence.inside.test(line)) {
+      fence = undefined;
+    }
+    const marker = FENCE_OPENER.exec(line);
+    const prefix = marker?.[1] ?? '';
+    const quotes = prefix.split('>').length - 1;
+    if (fence) {
+      if (
+        marker &&
+        quotes === fence.quotes &&
+        /^[> \t]*$/.test(prefix) &&
+        marker[2][0] === fence.delimiter[0] &&
+        marker[2].length >= fence.delimiter.length &&
+        !marker[3].trim()
+      ) {
+        fence = undefined;
+      }
+      return line;
+    }
+    if (inComment || /^ {0,3}<!--/.test(line)) {
+      inComment = !line.includes('-->');
+      return line;
+    }
+    if (marker && (marker[2][0] !== '`' || !marker[3].includes('`'))) {
+      const inside = quotes
+        ? new RegExp(`^(?: {0,3}>[ \t]?){${quotes}}`)
+        : prefix
+          ? new RegExp(`^ {${line.indexOf(marker[2])}}`)
+          : undefined;
+      fence = { delimiter: marker[2], quotes, inside };
+      return line;
+    }
+    return update(line);
+  });
+}
+
 /** Update selectors in stock examples without replacing the surrounding kept block. */
 function refreshKeptMcpSelectors(section: string, oldRepo: string, newRepo: string): string {
   if (oldRepo === newRepo) return section;
-  let fence: string | undefined;
-  let inComment = false;
-  return section
-    .split('\n')
-    .map((line) => {
-      const marker = FENCE_OPENER.exec(line);
-      if (fence) {
-        if (
-          marker?.[1] === '' &&
-          marker[2][0] === fence[0] &&
-          marker[2].length >= fence.length &&
-          !marker[3].trim()
-        ) {
-          fence = undefined;
-        }
-        return line;
-      }
-      if (inComment || /^ {0,3}<!--/.test(line)) {
-        inComment = !line.includes('-->');
-        return line;
-      }
-      if (marker?.[1] === '' && (marker[2][0] !== '`' || !marker[3].includes('`'))) {
-        fence = marker[2];
-        return line;
-      }
-      if (line.startsWith(REPO_INTRO)) {
-        return line.replace(`${REPO_INTRO}${oldRepo}\`.`, () => `${REPO_INTRO}${newRepo}\`.`);
-      }
-      const example = GENERATED_MCP_EXAMPLES.find(([prefix]) => line.startsWith(prefix));
-      if (!example) return line;
-      for (const args of example[1]) {
-        line = line.replace(`${args}repo: ${oldRepo}})\``, () => `${args}repo: ${newRepo}})\``);
-      }
-      return line;
-    })
-    .join('\n');
+  return mapInstructionProse(section, (line) => {
+    if (line.startsWith(REPO_INTRO)) {
+      return line.replace(`${REPO_INTRO}${oldRepo}\`.`, () => `${REPO_INTRO}${newRepo}\`.`);
+    }
+    const example = GENERATED_MCP_EXAMPLES.find(([prefix]) => line.startsWith(prefix));
+    if (!example) return line;
+    for (const args of example[1]) {
+      line = line.replace(`${args}repo: ${oldRepo}})\``, () => `${args}repo: ${newRepo}})\``);
+    }
+    return line;
+  });
+}
+
+// Only generated review line shapes can replace the stock sentence. Prose in
+// quote/list containers and indented examples has a different line prefix.
+const GENERATED_REVIEW_LINE =
+  /^(?:- \*\*MUST analyze changes before commit\.\*\*|For regression review\b|(?:For )?target branch\b|Regression base:|- run detect_changes\()/;
+
+function replaceFirstInstructionLine(
+  block: string,
+  pattern: RegExp,
+  replacement: (match: string, ...captures: string[]) => string,
+): string | undefined {
+  let found = false;
+  const updated = mapInstructionProse(block, (line) => {
+    if (found || !GENERATED_REVIEW_LINE.test(line)) return line;
+    return line.replace(pattern, (match, ...captures) => {
+      found = true;
+      return replacement(match, ...captures);
+    });
+  });
+  return found ? updated : undefined;
 }
 
 /**
@@ -1030,40 +1067,25 @@ export async function refreshBaseRefLine(
     if (endIdx === -1 || endIdx <= startIdx) continue;
     const blockEnd = endIdx + GITNEXUS_END_MARKER.length;
     const block = content.substring(startIdx, blockEnd);
-    // Preserve the runner emitted with the block. Its location follows the
-    // configured storage path, so assuming `.gitnexus/run.cjs` would break the
-    // CLI fallback when migrating guidance generated for an external store.
-    const legacyRunner = block.match(
-      /or `([^`\n]+?) detect-changes --scope compare --base-ref\b/,
-    )?.[1];
-    // Preserve the repository selector when refreshing the review target.
-    const mcpRepo = block.match(
-      /pass that SHA to `detect_changes\(\{scope: "compare", base_ref: "<merge-base SHA>", repo: ("(?:[^"\\`]|\\.)*")\}\)`/,
-    )?.[1];
-    const mergeBaseGuidance = regressionReviewGuidance(defaultBranch, legacyRunner, mcpRepo);
-    let newBlock = block;
-    if (!block.includes(mergeBaseGuidance) && block.includes('base_ref: "<merge-base SHA>"')) {
-      newBlock = block.replace(
-        /(?:(?:For (?:regression review of )?)?target branch "(?:[^"\\]|\\.)*": `git fetch origin -- [^`\n]+`; pass `git merge-base [^`\n]+ HEAD`'s SHA|Regression base: (?:PR GitHub `baseRefOid`\/`headRefOid`|exact PR base\/head commits from host metadata); target branch "(?:[^"\\]|\\.)*" via tracking remote\. Fetch both; pass merge-base SHA|For regression review, fetch target branch "(?:[^"\\]|\\.)*" from its remote; compute its merge base with the reviewed HEAD and pass that SHA) to `detect_changes\(\{scope: "compare", base_ref: "<merge-base SHA>"(?:, repo: "(?:[^"\\`]|\\.)*")?\}\)`(?: or `[^`\n]+? detect-changes --scope compare --base-ref "<merge-base SHA>" --repo \.\`)?\./,
-        () => mergeBaseGuidance,
-      );
-    }
-    if (newBlock === block) {
-      // Migrate the legacy generated sentence.
-      newBlock = block.replace(
-        /For regression review: `detect_changes\(\{scope: "compare", base_ref: "(?:[^"\\]|\\.)*"\}\)`(?: or `[^`\n]+? detect-changes --scope compare --base-ref "(?:[^"\\]|\\.)*" --repo \.\`)?\./,
-        mergeBaseGuidance,
-      );
-    }
-    if (newBlock === block) {
-      // Older compact blocks used this exact generated bullet rather than the
-      // prose sentence. Keep the anchor narrow so user-authored compare calls
-      // elsewhere in the managed block remain untouched.
-      newBlock = block.replace(
-        /- run detect_changes\(\{scope: "compare", base_ref: "(?:[^"\\]|\\.)*"\}\)(?=\s*(?:\n|$))/,
-        `- ${mergeBaseGuidance}`,
-      );
-    }
+    // Read the selector and runner from the generated sentence being replaced.
+    // A user's other examples can refer to different checkouts and runners.
+    const newBlock =
+      replaceFirstInstructionLine(
+        block,
+        /(?:(?:For (?:regression review of )?)?target branch "(?:[^"\\]|\\.)*": `git fetch origin -- [^`\n]+`; pass `git merge-base [^`\n]+ HEAD`'s SHA|Regression base: (?:PR GitHub `baseRefOid`\/`headRefOid`|exact PR base\/head commits from host metadata); target branch "(?:[^"\\]|\\.)*" via tracking remote\. Fetch both; pass merge-base SHA|For regression review, fetch target branch "(?:[^"\\]|\\.)*" from its remote; compute its merge base with the reviewed HEAD and pass that SHA) to `detect_changes\(\{scope: "compare", base_ref: "<merge-base SHA>"(?:, repo: ("(?:[^"\\`]|\\.)*"))?\}\)`(?: or `([^`\n]+?) detect-changes --scope compare --base-ref "<merge-base SHA>" --repo \.\`)?\./,
+        (_sentence, selector, runner) => regressionReviewGuidance(defaultBranch, runner, selector),
+      ) ??
+      replaceFirstInstructionLine(
+        block,
+        /For regression review: `detect_changes\(\{scope: "compare", base_ref: "(?:[^"\\]|\\.)*"\}\)`(?: or `([^`\n]+?) detect-changes --scope compare --base-ref "(?:[^"\\]|\\.)*" --repo \.\`)?\./,
+        (_sentence, runner) => regressionReviewGuidance(defaultBranch, runner),
+      ) ??
+      replaceFirstInstructionLine(
+        block,
+        /^- run detect_changes\(\{scope: "compare", base_ref: "(?:[^"\\]|\\.)*"\}\)[ \t]*$/,
+        () => `- ${regressionReviewGuidance(defaultBranch)}`,
+      ) ??
+      block;
     if (newBlock === block) continue; // no base_ref line present, or already current
     const newContent = content.substring(0, startIdx) + newBlock + content.substring(blockEnd);
     try {

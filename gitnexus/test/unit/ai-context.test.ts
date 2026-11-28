@@ -273,6 +273,77 @@ describe('kept instruction ownership', () => {
     },
   );
 
+  it.each(['Ops** Tools', 'Ops** Tools** Team', 'Ops** Tools **v2**'])(
+    'preserves the complete literal alias %s and the user note on warm and full refresh',
+    async (alias) => {
+      const note = ' and keep **this exact note**.';
+      const stock = (name: string) =>
+        '- For security review, `explain({target: "fileOrSymbol", repo: ' +
+        JSON.stringify(name) +
+        '})` lists taint findings.';
+      const header = 'Indexed as **' + alias + '**' + note;
+      const sibling = stock('Ops');
+      const body = [header, sibling, stock(alias), keptReview('main', alias)].join('\n\n');
+      await withKeptInstructions(body, async (directory, file) => {
+        const original = await fs.readFile(file, 'utf8');
+        await refreshBaseRefLine(directory, 'develop', { instructionFile: 'AGENTS.md' });
+        const warm = await fs.readFile(file, 'utf8');
+        expect(warm).toContain(header);
+        expect(warm).toContain(sibling);
+        expect(warm).toContain(stock('<path>'));
+        expect(warm).toContain(keptReview('develop', '<path>'));
+        const args = [
+          directory,
+          path.join(directory, '.gitnexus'),
+          'Renamed',
+          {},
+          undefined,
+          { noStats: true, skipSkills: true, instructionFile: 'AGENTS.md' },
+        ] as const;
+        for (const retained of [warm, original]) {
+          await fs.writeFile(file, retained);
+          await generateAIContextFiles(...args);
+          const full = await fs.readFile(file, 'utf8');
+          expect(full).toContain('Indexed as **Renamed**' + note);
+          expect(full).toContain(sibling);
+          expect(full).toContain(stock('<path>'));
+          await generateAIContextFiles(...args);
+          expect(await fs.readFile(file, 'utf8')).toBe(full);
+        }
+      });
+    },
+  );
+
+  it('refreshes a lone starred header before a custom bold note', async () => {
+    const note = ' and keep **this exact note**.';
+    await withKeptInstructions('Indexed as **Ops** Tools**' + note, async (directory, file) => {
+      await generateAIContextFiles(
+        directory,
+        path.join(directory, '.gitnexus'),
+        'Renamed',
+        {},
+        undefined,
+        { noStats: true, skipSkills: true, instructionFile: 'AGENTS.md' },
+      );
+      expect(await fs.readFile(file, 'utf8')).toContain('Indexed as **Renamed**' + note);
+    });
+  });
+
+  it('preserves an unmatched star pair in a user note after a canonical header', async () => {
+    const note = '. Preserve the notation x**.';
+    await withKeptInstructions('Indexed as **Old**' + note, async (directory, file) => {
+      await generateAIContextFiles(
+        directory,
+        path.join(directory, '.gitnexus'),
+        'Renamed',
+        {},
+        undefined,
+        { noStats: true, skipSkills: true, instructionFile: 'AGENTS.md' },
+      );
+      expect(await fs.readFile(file, 'utf8')).toContain('Indexed as **Renamed**' + note);
+    });
+  });
+
   it('updates only the live kept header and its stock calls on a full refresh', async () => {
     const hidden = '~~~~md\n' + keptSnippet + '\n~~~~';
     const liveHeader = 'Indexed as **OldAlias** (2 symbols,\n3 relationships, 1 execution flows).';

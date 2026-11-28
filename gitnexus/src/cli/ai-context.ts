@@ -60,7 +60,9 @@ const GITNEXUS_END_MARKER = '<!-- gitnexus:end -->';
 // Plain names also work with custom text after the bold header in lean blocks.
 // The optional counts can wrap across Markdown lines.
 const STATS_LINE_PATTERN =
-  /^((?:This project is )?(?:Indexed as|indexed by GitNexus as)) (\*\*[^\r\n]+?\*\*(?=[ \t(]|[.!?;:](?:\s|$)|\r?$))(\s+\(\d+\s+symbols,\s+\d+\s+relationships,\s+\d+\s+execution\s+flows\))?/mu;
+  /^((?:This project is )?(?:Indexed as|indexed by GitNexus as)) (\*\*[^\r\n]+?\*\*(?=[ \t(]|[.!?;:](?:\s|$)|$))/u;
+const STATS_COUNTS_PATTERN =
+  /^\s+\(\d+\s+symbols,\s+\d+\s+relationships,\s+\d+\s+execution\s+flows\)/u;
 
 /**
  * Find the index of a section marker that occupies its own line.
@@ -565,19 +567,90 @@ function mapInstructionProse(
   );
 }
 
+/** Old headers wrote registry names literally between stars, including names containing **. */
+function headerProject(source: string, initial: string, section: string): string {
+  if (!source.slice(initial.length).includes('**')) return initial;
+  const boundary = /^(?:[ \t(]|[.!?;:](?:\s|$)|$)/u;
+  let project = initial;
+  // An unmatched closing delimiter belongs to the literal name. An opening
+  // delimiter, e.g. "and keep **this note**", belongs to the user's prose.
+  const paragraph = fromMarkdown(source).children[0];
+  if (paragraph?.type === 'paragraph') {
+    for (const child of paragraph.children) {
+      if (
+        child.type !== 'text' ||
+        child.position?.start.offset === undefined ||
+        child.position.end.offset === undefined
+      )
+        continue;
+      const start = child.position.start.offset;
+      const text = source.slice(start, child.position.end.offset);
+      for (const stars of text.matchAll(/\*{2,}/gu)) {
+        if (/^[.!?;:(]/u.test(source.slice(project.length).trimStart())) break;
+        const at = start + stars.index;
+        const end = at + stars[0].length;
+        if (
+          at >= project.length &&
+          /[^\s\\]/u.test(source[at - 1]) &&
+          boundary.test(source.slice(end))
+        )
+          project = source.slice(0, end);
+      }
+    }
+  }
+  // A serialized stock selector retains the exact spelling even if the
+  // name contains balanced emphasis. An explicit sibling only qualifies if
+  // its complete literal also matches the header, including its boundary.
+  const consider = (literal: string | undefined) => {
+    if (!literal) return;
+    try {
+      const name = JSON.parse(literal) as string;
+      const candidate = '**' + name + '**';
+      if (
+        candidate.length > project.length &&
+        source.startsWith(candidate) &&
+        boundary.test(source.slice(candidate.length))
+      )
+        project = candidate;
+    } catch {
+      // A manually edited non-JSON value cannot establish the previous alias.
+    }
+  };
+  mapInstructionProse(section, (line) => {
+    consider(LEGACY_MCP_INTRO.exec(line)?.[1]);
+    const example = GENERATED_MCP_EXAMPLES.find(([prefix]) => line.startsWith(prefix));
+    const argumentsToCheck =
+      example?.[1] ??
+      (GENERATED_REVIEW_LINE.test(line)
+        ? ['to `detect_changes({scope: "compare", base_ref: "<merge-base SHA>"']
+        : []);
+    for (const args of argumentsToCheck) {
+      const start = line.indexOf(args);
+      if (start !== -1) consider(MCP_CALL_TAIL.exec(line.slice(start + args.length))?.[1]);
+    }
+    return line;
+  });
+  return project;
+}
+
 /** The counts can wrap; match their original spelling starting at the first live header. */
 function instructionHeader(section: string) {
-  let header: { match: RegExpExecArray; before: string; after: string } | undefined;
+  let header:
+    | { match: [string, string, string, string | undefined]; before: string; after: string }
+    | undefined;
   mapInstructionProse(section, (line, offset) => {
-    if (!header && STATS_LINE_PATTERN.test(line)) {
-      const match = STATS_LINE_PATTERN.exec(section.slice(offset));
-      if (match?.index === 0) {
-        header = {
-          match,
-          before: section.slice(0, offset),
-          after: section.slice(offset + match[0].length),
-        };
-      }
+    const match = !header && STATS_LINE_PATTERN.exec(line);
+    if (match) {
+      const prefix = match[1];
+      const project = headerProject(line.slice(prefix.length + 1), match[2], section);
+      const projectEnd = offset + prefix.length + 1 + project.length;
+      const counts = STATS_COUNTS_PATTERN.exec(section.slice(projectEnd))?.[0];
+      const end = projectEnd + (counts?.length ?? 0);
+      header = {
+        match: [section.slice(offset, end), prefix, project, counts],
+        before: section.slice(0, offset),
+        after: section.slice(end),
+      };
     }
     return line;
   });

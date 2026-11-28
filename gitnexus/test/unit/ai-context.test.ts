@@ -13,6 +13,47 @@ import { _captureLogger } from '../../src/core/logger.js';
 
 const checkoutGuidance = "> MCP `<path>` is this checkout's absolute `list_repos` path.";
 
+describe('kept instruction ownership', () => {
+  async function withKeptInstructions(
+    body: string,
+    run: (directory: string, file: string) => Promise<void>,
+  ) {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'gn-kept-'));
+    const file = path.join(directory, 'AGENTS.md');
+    try {
+      await fs.writeFile(
+        file,
+        `<!-- gitnexus:start -->\n<!-- gitnexus:keep -->\n${body}\n<!-- gitnexus:end -->\n`,
+      );
+      await run(directory, file);
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  it.each(['Acme*App', 'Acme**App', 'pre**.prod'])(
+    'preserves a bold user note after renaming %s',
+    async (oldName) => {
+      const note = ' and keep **this exact note**.';
+      await withKeptInstructions(`Indexed as **${oldName}**${note}`, async (directory, file) => {
+        await generateAIContextFiles(
+          directory,
+          path.join(directory, '.gitnexus'),
+          'NewAlias',
+          {},
+          undefined,
+          {
+            noStats: true,
+            skipSkills: true,
+            instructionFile: 'AGENTS.md',
+          },
+        );
+        expect(await fs.readFile(file, 'utf8')).toContain(`Indexed as **NewAlias**${note}`);
+      });
+    },
+  );
+});
+
 describe('generateAIContextFiles', () => {
   let tmpDir: string;
   let storagePath: string;

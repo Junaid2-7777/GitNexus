@@ -855,6 +855,36 @@ Custom workflow still refers to \`repo: "${oldName}"\`.
     },
   );
 
+  it.each(['RecordedRepo', 'RenamedRepo'])(
+    'qualifies pre-selector kept guidance when the selected name is %s',
+    async (name) => {
+      // Stock MCP calls copied from the template before it emitted selectors.
+      const fixture = `<!-- gitnexus:start -->
+<!-- gitnexus:keep -->
+This project is indexed by GitNexus as **RecordedRepo**.
+
+- **MUST run impact before code/config/test edits.** Use \`impact({target: "symbolName", direction: "upstream"})\`.
+- **MUST analyze changes before commit.** Run \`detect_changes({scope: "all"})\`. For regression review, fetch target branch "main" from its remote; compute its merge base with the reviewed HEAD and pass that SHA to \`detect_changes({scope: "compare", base_ref: "<merge-base SHA>"})\`.
+- **MUST use \`query({search_query: "concept"})\` for concepts/flows, \`context({name: "symbolName"})\` for a named symbol, or \`impact\` for blast radius.**
+- For security review, \`explain({target: "fileOrSymbol"})\` lists taint findings.
+- For control/data dependence, \`pdg_query({mode: "controls", target: "fileOrSymbol"})\` answers "under what condition does X run?" and \`pdg_query({mode: "flows", target, variable})\` traces "where does variable Y flow?".
+
+Custom migration example: \`context({name: "symbolName"})\`.
+<!-- gitnexus:end -->
+`;
+      for (const file of ['AGENTS.md', 'CLAUDE.md']) {
+        await fs.writeFile(path.join(tmpDir, file), fixture);
+      }
+      await generateAIContextFiles(tmpDir, storagePath, name, {}, undefined, { noStats: true });
+      for (const file of ['AGENTS.md', 'CLAUDE.md']) {
+        const content = await fs.readFile(path.join(tmpDir, file), 'utf8');
+        expect(content).toContain(`indexed by GitNexus as **${name}**.`);
+        expect(content.split(`repo: "${name}"`)).toHaveLength(9);
+        expect(content).toContain('Custom migration example: `context({name: "symbolName"})`.');
+      }
+    },
+  );
+
   it('replaces section when no keep marker is present', async () => {
     const agentsPath = path.join(tmpDir, 'AGENTS.md');
 

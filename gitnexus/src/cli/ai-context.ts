@@ -457,26 +457,26 @@ const REPO_INTRO = '> For repo-scoped MCP calls, pass `repo: ';
 const GENERATED_MCP_EXAMPLES = [
   [
     '- **MUST run impact before code/config/test edits.** Use `impact(',
-    ['`impact({target: "symbolName", direction: "upstream", '],
+    ['`impact({target: "symbolName", direction: "upstream"'],
   ],
   [
     '- **MUST analyze changes before commit.** Run `detect_changes(',
     [
-      '`detect_changes({scope: "all", ',
-      'pass that SHA to `detect_changes({scope: "compare", base_ref: "<merge-base SHA>", ',
+      '`detect_changes({scope: "all"',
+      'pass that SHA to `detect_changes({scope: "compare", base_ref: "<merge-base SHA>"',
     ],
   ],
   [
     '- **MUST use `query(',
-    ['`query({search_query: "concept", ', 'for concepts/flows, `context({name: "symbolName", '],
+    ['`query({search_query: "concept"', 'for concepts/flows, `context({name: "symbolName"'],
   ],
-  ['- For security review, `explain(', ['`explain({target: "fileOrSymbol", ']],
-  ['- `explain(', ['`explain({target: "fileOrSymbol", ']],
+  ['- For security review, `explain(', ['`explain({target: "fileOrSymbol"']],
+  ['- `explain(', ['`explain({target: "fileOrSymbol"']],
   [
     '- For control/data dependence, `pdg_query(',
     [
-      '`pdg_query({mode: "controls", target: "fileOrSymbol", ',
-      'and `pdg_query({mode: "flows", target, variable, ',
+      '`pdg_query({mode: "controls", target: "fileOrSymbol"',
+      'and `pdg_query({mode: "flows", target, variable',
     ],
   ],
 ] as const;
@@ -524,7 +524,6 @@ function mapInstructionProse(section: string, update: (line: string) => string):
 
 /** Update selectors in stock examples without replacing the surrounding kept block. */
 function refreshKeptMcpSelectors(section: string, oldRepo: string, newRepo: string): string {
-  if (oldRepo === newRepo) return section;
   return mapInstructionProse(section, (line) => {
     if (line.startsWith(REPO_INTRO)) {
       return line.replace(`${REPO_INTRO}${oldRepo}\`.`, () => `${REPO_INTRO}${newRepo}\`.`);
@@ -532,7 +531,9 @@ function refreshKeptMcpSelectors(section: string, oldRepo: string, newRepo: stri
     const example = GENERATED_MCP_EXAMPLES.find(([prefix]) => line.startsWith(prefix));
     if (!example) return line;
     for (const args of example[1]) {
-      line = line.replace(`${args}repo: ${oldRepo}})\``, () => `${args}repo: ${newRepo}})\``);
+      const qualified = `${args}, repo: ${oldRepo}})\``;
+      const previous = line.includes(qualified) ? qualified : `${args}})\``;
+      line = line.replace(previous, () => `${args}, repo: ${newRepo}})\``);
     }
     return line;
   });

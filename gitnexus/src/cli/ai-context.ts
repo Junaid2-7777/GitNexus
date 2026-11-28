@@ -1112,11 +1112,11 @@ export async function refreshBaseRefLine(
     // Use the managed header as evidence of the former generated alias.
     // Explicit cross-repo references and blocks without a header stay scoped as written.
     const previousName = instructionHeader(block)?.match[2].slice(2, -2);
-    let migratedSelector = false;
+    let needsCheckoutGuidance = false;
     const reviewSelector = (selector?: string) => {
       if (previousName === undefined) return selector;
       const portable = portableMcpSelector(selector, previousName);
-      migratedSelector ||= portable !== selector;
+      needsCheckoutGuidance ||= portable === MCP_REPO_SELECTOR;
       return portable;
     };
     let newBlock =
@@ -1138,7 +1138,7 @@ export async function refreshBaseRefLine(
       ) ??
       block;
     if (previousName !== undefined) newBlock = refreshKeptMcpSelectors(newBlock, previousName);
-    if (migratedSelector && !hasCheckoutGuidance(newBlock)) {
+    if (needsCheckoutGuidance && !hasCheckoutGuidance(newBlock)) {
       newBlock = newBlock.replace(
         /^(<!-- gitnexus:start -->)(\r?\n)/,
         (_match, marker, eol) => `${marker}${eol}${MCP_CHECKOUT_GUIDANCE}${eol}`,

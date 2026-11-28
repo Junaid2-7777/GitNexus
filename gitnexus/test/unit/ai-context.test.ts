@@ -186,6 +186,26 @@ describe('kept instruction ownership', () => {
     },
   );
 
+  it('restores a missing live checkout instruction after the compare selector is already portable', async () => {
+    const archived = '~~~markdown\n' + checkoutGuidance + '\n~~~';
+    const review = keptReview('develop', '<path>');
+    await withKeptInstructions(
+      ['Indexed as **Known**.', archived, review].join('\n'),
+      async (directory, file) => {
+        const before = await fs.readFile(file, 'utf8');
+        await refreshBaseRefLine(directory, 'develop', { instructionFile: 'AGENTS.md' });
+        const expected = before.replace(
+          '<!-- gitnexus:start -->\n',
+          '<!-- gitnexus:start -->\n' + checkoutGuidance + '\n',
+        );
+        expect(await fs.readFile(file, 'utf8')).toBe(expected);
+        expect(
+          (await refreshBaseRefLine(directory, 'develop', { instructionFile: 'AGENTS.md' })).files,
+        ).toEqual([]);
+      },
+    );
+  });
+
   it('updates only the live kept header and its stock calls on a full refresh', async () => {
     const hidden = '~~~~md\n' + keptSnippet + '\n~~~~';
     const liveHeader = 'Indexed as **OldAlias** (2 symbols,\n3 relationships, 1 execution flows).';

@@ -251,7 +251,9 @@ export async function contextCommand(
 function parseToolDepth(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined;
   try {
-    return parseIntegerOption(raw, '--depth', { minimum: 1 });
+    // Trace and impact accept legacy zero-padded decimal depths.
+    const normalized = raw.trim().replace(/^0+(?=\d)/, '');
+    return parseIntegerOption(normalized, '--depth', { minimum: 1 });
   } catch (err) {
     if (!(err instanceof IntegerOptionError)) throw err;
     cliError(err.message);

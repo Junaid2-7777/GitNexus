@@ -148,7 +148,7 @@ describe('CLI trace command', () => {
     exitSpy.mockRestore();
   });
 
-  it.each(['1e1', '0x2', '1.5', '-1', '0', '9007199254740992'])(
+  it.each(['1e1', '0x2', '1.5', '-1', '0', '00', '9007199254740992', '09007199254740992'])(
     'rejects invalid depth %s before starting trace or impact',
     async (depth) => {
       const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
@@ -166,9 +166,15 @@ describe('CLI trace command', () => {
     },
   );
 
-  it('forwards a valid decimal impact depth without changing its value', async () => {
-    await impactCommand('A', { depth: '10' });
-    expect(callTool).toHaveBeenCalledWith('impact', expect.objectContaining({ maxDepth: 10 }));
+  it.each([
+    ['10', 10],
+    ['02', 2],
+    ['09007199254740991', Number.MAX_SAFE_INTEGER],
+  ])('forwards decimal depth %s as maxDepth for trace and impact', async (depth, maxDepth) => {
+    await traceCommand('A', 'B', { depth });
+    await impactCommand('A', { depth });
+    expect(callTool).toHaveBeenCalledWith('trace', expect.objectContaining({ maxDepth }));
+    expect(callTool).toHaveBeenCalledWith('impact', expect.objectContaining({ maxDepth }));
   });
 
   it('exits with usage when --from-uid or --to-uid is a swallowed flag value', async () => {

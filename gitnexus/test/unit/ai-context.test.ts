@@ -823,6 +823,38 @@ Resources: gitnexus://repo/TestProject/context
     expect(repeated.files).toContain('CLAUDE.md (preserved)');
   });
 
+  it.each(['Acme*App', 'Acme**App', 'Acme*'])(
+    'refreshes generated selectors and preserves custom prose after renaming %s',
+    async (oldName) => {
+      const currentName = 'NewCanonicalRepo';
+      const note = 'Keep this **bold** review note.';
+      const fixture = `<!-- gitnexus:start -->
+<!-- gitnexus:keep -->
+Indexed as **${oldName}**. ${note}
+
+- **MUST run impact before code/config/test edits.** Use \`impact({target: "symbolName", direction: "upstream", repo: "${oldName}"})\`.
+
+Custom workflow still refers to \`repo: "${oldName}"\`.
+<!-- gitnexus:end -->
+`;
+      for (const file of ['AGENTS.md', 'CLAUDE.md']) {
+        await fs.writeFile(path.join(tmpDir, file), fixture);
+      }
+
+      await generateAIContextFiles(tmpDir, storagePath, currentName, {}, undefined, {
+        noStats: true,
+      });
+      for (const file of ['AGENTS.md', 'CLAUDE.md']) {
+        const output = await fs.readFile(path.join(tmpDir, file), 'utf8');
+        expect(output).toContain(`Indexed as **${currentName}**. ${note}`);
+        expect(output).toContain(
+          'impact({target: "symbolName", direction: "upstream", repo: "NewCanonicalRepo"})',
+        );
+        expect(output).toContain(`Custom workflow still refers to \`repo: "${oldName}"\`.`);
+      }
+    },
+  );
+
   it('replaces section when no keep marker is present', async () => {
     const agentsPath = path.join(tmpDir, 'AGENTS.md');
 

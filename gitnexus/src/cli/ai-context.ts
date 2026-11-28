@@ -55,9 +55,11 @@ export interface AIContextOptions {
 
 const GITNEXUS_START_MARKER = '<!-- gitnexus:start -->';
 const GITNEXUS_END_MARKER = '<!-- gitnexus:end -->';
-// Matches the template and lean headers, including wrapped Markdown counts.
+// Recognize literal asterisks in registry aliases before the generated suffix.
+// Plain names also work with custom text after the bold header in lean blocks.
+// The optional counts can wrap across Markdown lines.
 const STATS_LINE_PATTERN =
-  /^((?:This project is )?(?:Indexed as|indexed by GitNexus as)) (\*\*[^*\n]+\*\*)(\s+\(\d+\s+symbols,\s+\d+\s+relationships,\s+\d+\s+execution\s+flows\))?/m;
+  /^((?:This project is )?(?:Indexed as|indexed by GitNexus as)) (\*\*(?:[^*\r\n]+\*\*(?![\p{L}\p{N}*])|[^\r\n]+?\*\*(?=[ \t]*(?:[.(]|\r?$))))(\s+\(\d+\s+symbols,\s+\d+\s+relationships,\s+\d+\s+execution\s+flows\))?/mu;
 
 /**
  * Find the index of a section marker that occupies its own line.

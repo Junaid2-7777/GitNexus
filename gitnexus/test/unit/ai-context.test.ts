@@ -52,6 +52,22 @@ describe('kept instruction ownership', () => {
       });
     },
   );
+
+  it('keeps comments opened after prose from intercepting a live branch refresh', async () => {
+    const review = (branch: string) =>
+      `For regression review, fetch target branch "${branch}" from its remote; compute its merge base with the reviewed HEAD and pass that SHA to \`detect_changes({scope: "compare", base_ref: "<merge-base SHA>", repo: "<path>"})\`.`;
+    const fenced = `~~~markdown <!--\n${review('fenced')}\n~~~`;
+    const comment = `Our archive follows. <!--\n${review('archived')}\n-->`;
+    await withKeptInstructions(
+      `Indexed as **OldAlias**.\n\n${fenced}\n${comment}\n${review('main')}`,
+      async (directory, file) => {
+        await refreshBaseRefLine(directory, 'develop', { instructionFile: 'AGENTS.md' });
+        const content = await fs.readFile(file, 'utf8');
+        expect(content).toContain(comment);
+        expect(content).toContain(review('develop'));
+      },
+    );
+  });
 });
 
 describe('generateAIContextFiles', () => {

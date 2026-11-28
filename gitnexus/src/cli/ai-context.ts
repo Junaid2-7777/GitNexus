@@ -474,6 +474,19 @@ const GENERATED_MCP_EXAMPLES = [
   ],
 ] as const;
 
+// An HTML opener inside a matched backtick code span is literal.
+function inlineCommentStart(line: string): number {
+  if (!line.includes('<!--')) return -1;
+  const tokens = [...line.matchAll(/(?<!\\)`+|(?<!\\)<!--/g)];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token[0] === '<!--') return token.index ?? -1;
+    const closing = tokens.findIndex((candidate, index) => index > i && candidate[0] === token[0]);
+    if (closing !== -1) i = closing;
+  }
+  return -1;
+}
+
 /** Apply edits to prose lines, preserving fences, comments and original endings. */
 function mapInstructionProse(section: string, update: (line: string) => string): string {
   let fence: { delimiter: string; quotes: number; inside?: RegExp } | undefined;
@@ -498,11 +511,7 @@ function mapInstructionProse(section: string, update: (line: string) => string):
       }
       return line;
     }
-    if (inComment || /^ {0,3}<!--/.test(line)) {
-      inComment = !line.includes('-->');
-      return line;
-    }
-    if (marker && (marker[2][0] !== '`' || !marker[3].includes('`'))) {
+    if (!inComment && marker && (marker[2][0] !== '`' || !marker[3].includes('`'))) {
       const inside = quotes
         ? new RegExp(`^(?: {0,3}>[ \t]?){${quotes}}`)
         : prefix
@@ -510,6 +519,11 @@ function mapInstructionProse(section: string, update: (line: string) => string):
           : undefined;
       fence = { delimiter: marker[2], quotes, inside };
       return line;
+    }
+    const opener = inComment ? 0 : inlineCommentStart(line);
+    if (opener !== -1) {
+      inComment = !line.includes('-->', inComment ? 0 : opener + 4);
+      return opener === 0 ? line : update(line.slice(0, opener)) + line.slice(opener);
     }
     return update(line);
   });

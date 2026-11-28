@@ -238,8 +238,7 @@ ${tableBody}`
   // bun-only machine has no npm, npx or pnpm at all, and the npx-only note left
   // it with a bootstrap command it could not run.
   const bootstrapNote =
-    `No \`${runnerPath}\`? Bootstrap with \`npx\`, \`bunx\`, or \`pnpm dlx\`; ` +
-    'e.g. `bunx gitnexus@latest analyze` (#1939).';
+    'Missing runner? Use `npx`, `bunx`, or `pnpm dlx`: `bunx gitnexus@latest analyze` (#1939).';
 
   // This block is injected into every user's repo and its total size is capped
   // by test (ai-context.test.ts, #856) — a new bullet or clause has to be paid
@@ -258,7 +257,7 @@ ${tableBody}`
 This project is indexed by GitNexus as **${projectName}**${noStats ? '' : ` (${stats.nodes || 0} symbols, ${stats.edges || 0} relationships, ${stats.processes || 0} execution flows)`}.
 
 > Index stale? Run \`${runner} analyze --index-only\`. ${bootstrapNote}
-> For repo-scoped MCP calls, pass \`repo: ${mcpRepo}\`. Check staleness.status and branch/lastCommit when present. Re-index only if behind or diverged.
+> Check staleness.status and branch/lastCommit when present. Re-index only if behind or diverged.
 
 ## Always Do
 
@@ -268,14 +267,14 @@ This project is indexed by GitNexus as **${projectName}**${noStats ? '' : ` (${s
       : ''
   }
 - **MUST analyze changes before commit.** Run \`detect_changes({scope: "all", repo: ${mcpRepo}})\` or \`${runner} detect-changes --scope all --repo .\`. \`partial: true\` or \`truncated: true\` is not a clean check — a zero means unseen, not unaffected; re-run it. ${regressionReviewGuidance(defaultBranch, runner, mcpRepo)}
-- MUST warn on HIGH/CRITICAL \`risk\` pre-edit; never use \`riskSharedAxes\` to waive a HIGH/CRITICAL \`risk\` warning. Compare File/symbol: MCP File omits axes; Graph-RAG expands File.
-- **MUST treat \`risk: UNKNOWN\` as unresolved, not as low.** Zero callers can mean unresolved calls (plain-object property access, dynamic dispatch, cross-language calls), not an unused symbol. \`impact\` pairs \`UNKNOWN\` with a \`riskNote\` saying so. Verify with text search before editing or deleting.
+- MUST warn on HIGH/CRITICAL \`risk\` pre-edit; never use \`riskSharedAxes\` to waive a HIGH/CRITICAL \`risk\` warning. MCP File omits axes; Graph-RAG expands File.
+- **MUST treat \`risk: UNKNOWN\` as unresolved, not as low.** An empty caller set is not evidence the symbol is unused — it can also mean the callers are not resolvable by the index (plain-object property access, dynamic dispatch, cross-language calls). \`impact\` pairs \`UNKNOWN\` with a \`riskNote\` saying so. Confirm with a text search before treating the symbol as safe to change or delete; do not proceed on the strength of a zero.
 - **MUST use \`query({search_query: "concept", repo: ${mcpRepo}})\` for concepts/flows, \`context({name: "symbolName", repo: ${mcpRepo}})\` for a named symbol, or \`impact\` for blast radius, for callers, dependencies, imports, or flows.** Text search only for empty/\`UNKNOWN\`/literals.${
     hasSpringActuator
       ? '\n- Spring Actuator runtime evidence is enabled. A Route is authoritative only when `runtimeConfirmed === true`; `runtimeSource` is provenance and may also describe conflicts. Snapshot values are never persisted.'
       : ''
   }
-- For security review, \`explain({target: "fileOrSymbol", repo: ${mcpRepo}})\` lists taint findings (source→sink flows; needs \`analyze --pdg\`).${
+- \`explain({target: "fileOrSymbol", repo: ${mcpRepo}})\` lists taint findings (source→sink flows; needs \`analyze --pdg\`).${
     hasPdg
       ? `\n- For control/data dependence, \`pdg_query({mode: "controls", target: "fileOrSymbol", repo: ${mcpRepo}})\` answers "under what condition does X run?" (CDG, incl. guard clauses) and \`pdg_query({mode: "flows", target, variable, repo: ${mcpRepo}})\` traces "where does variable Y flow?" (REACHING_DEF). \`--pdg\` layer.`
       : ''

@@ -53,6 +53,33 @@ describe('kept instruction ownership', () => {
     },
   );
 
+  it('keeps explicit group and checkout selectors in otherwise stock examples', async () => {
+    const explicit =
+      '- **MUST use `query({search_query: "concept", repo: "@platform"})` for concepts/flows, `context({name: "symbolName", repo: "/sibling"})` for a named symbol, or `impact` for blast radius.**';
+    const stock =
+      '- For security review, `explain({target: "fileOrSymbol", repo: "OldAlias"})` lists taint findings.';
+    await withKeptInstructions(
+      `Indexed as **OldAlias**.\n\n${explicit}\n${stock}`,
+      async (directory, file) => {
+        const args = [
+          directory,
+          path.join(directory, '.gitnexus'),
+          'NewAlias',
+          {},
+          undefined,
+          { noStats: true, skipSkills: true, instructionFile: 'AGENTS.md' },
+        ] as const;
+        await generateAIContextFiles(...args);
+        const content = await fs.readFile(file, 'utf8');
+        expect(content).toContain(explicit);
+        expect(content).toContain('explain({target: "fileOrSymbol", repo: "<path>"})');
+        expect(content).toContain(checkoutGuidance);
+        await generateAIContextFiles(...args);
+        expect(await fs.readFile(file, 'utf8')).toBe(content);
+      },
+    );
+  });
+
   it('keeps comments opened after prose from intercepting a live branch refresh', async () => {
     const review = (branch: string) =>
       `For regression review, fetch target branch "${branch}" from its remote; compute its merge base with the reviewed HEAD and pass that SHA to \`detect_changes({scope: "compare", base_ref: "<merge-base SHA>", repo: "<path>"})\`.`;

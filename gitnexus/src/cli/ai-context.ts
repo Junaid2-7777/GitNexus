@@ -445,8 +445,8 @@ function stripVolatileCounts(section: string): string {
     .replace(/ \(\d+ symbols\)/g, ' (<count>)');
 }
 
-const LEGACY_MCP_INTRO = /^> For repo-scoped MCP calls, pass `repo: "(?:[^"\\`]|\\.)*"`\./;
-const MCP_CALL_TAIL = /^(?:, repo: "(?:[^"\\`]|\\.)*")?\}\)`/;
+const LEGACY_MCP_INTRO = /^> For repo-scoped MCP calls, pass `repo: ("(?:[^"\\`]|\\.)*")`\./;
+const MCP_CALL_TAIL = /^(?:, repo: ("(?:[^"\\`]|\\.)*"))?\}\)`/;
 const GENERATED_MCP_EXAMPLES = [
   [
     '- **MUST run impact before code/config/test edits.** Use `impact(',
@@ -529,18 +529,36 @@ function mapInstructionProse(section: string, update: (line: string) => string):
   });
 }
 
+/** Preserve explicitly selected siblings and groups in kept instructions. */
+function portableMcpSelector(
+  selector: string | undefined,
+  previousName: string | undefined,
+): string {
+  if (selector === undefined) return MCP_REPO_SELECTOR;
+  if (previousName === undefined) return selector;
+  try {
+    return JSON.parse(selector) === previousName ? MCP_REPO_SELECTOR : selector;
+  } catch {
+    return selector;
+  }
+}
+
 /** Upgrade stock examples without replacing the surrounding kept block. */
-function refreshKeptMcpSelectors(section: string): string {
+function refreshKeptMcpSelectors(section: string, previousName: string | undefined): string {
+  const isGeneratedIntroduction = (line: string) => {
+    const match = LEGACY_MCP_INTRO.exec(line);
+    return match && portableMcpSelector(match[1], previousName) === MCP_REPO_SELECTOR;
+  };
   let needsGuidance = true;
   mapInstructionProse(section, (line) => {
-    if (line.startsWith(MCP_CHECKOUT_GUIDANCE) || LEGACY_MCP_INTRO.test(line)) {
+    if (line.startsWith(MCP_CHECKOUT_GUIDANCE) || isGeneratedIntroduction(line)) {
       needsGuidance = false;
     }
     return line;
   });
 
   return mapInstructionProse(section, (line) => {
-    if (LEGACY_MCP_INTRO.test(line)) {
+    if (isGeneratedIntroduction(line)) {
       return line.replace(LEGACY_MCP_INTRO, () => MCP_CHECKOUT_GUIDANCE);
     }
     const example = GENERATED_MCP_EXAMPLES.find(([prefix]) => line.startsWith(prefix));
@@ -550,10 +568,10 @@ function refreshKeptMcpSelectors(section: string): string {
       const callStart = line.indexOf(args);
       if (callStart < 0) continue;
       const tailStart = callStart + args.length;
-      const tail = line.slice(tailStart).match(MCP_CALL_TAIL)?.[0];
-      if (tail === undefined) continue;
+      const tail = MCP_CALL_TAIL.exec(line.slice(tailStart));
+      if (!tail || portableMcpSelector(tail[1], previousName) !== MCP_REPO_SELECTOR) continue;
       hasStockCall = true;
-      line = `${line.slice(0, tailStart)}, repo: ${MCP_REPO_SELECTOR}})\`${line.slice(tailStart + tail.length)}`;
+      line = `${line.slice(0, tailStart)}, repo: ${MCP_REPO_SELECTOR}})\`${line.slice(tailStart + tail[0].length)}`;
     }
     if (!hasStockCall || !needsGuidance) return line;
     needsGuidance = false;
@@ -689,7 +707,8 @@ async function upsertGitNexusSection(
             : `${statsPrefix} **${projectName}** (${newStatsInner})`;
         updatedSection = existingSection.replace(STATS_LINE_PATTERN, () => statsLine);
       }
-      updatedSection = refreshKeptMcpSelectors(updatedSection);
+      const previousName = statsMatch?.[2].slice(2, -2);
+      updatedSection = refreshKeptMcpSelectors(updatedSection, previousName);
       // Background refreshes preserve count-only changes in lean blocks (#2907).
       if (comparable(updatedSection) === comparable(existingSection)) {
         return repairLineEndings();

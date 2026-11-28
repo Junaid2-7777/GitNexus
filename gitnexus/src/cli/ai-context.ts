@@ -1093,25 +1093,40 @@ export async function refreshBaseRefLine(
     if (endIdx === -1 || endIdx <= startIdx) continue;
     const blockEnd = endIdx + GITNEXUS_END_MARKER.length;
     const block = content.substring(startIdx, blockEnd);
-    // Read the selector and runner from the generated sentence being replaced.
-    // A user's other examples can refer to different checkouts and runners.
-    const newBlock =
+    // Use the managed header as evidence of the former generated alias.
+    // Explicit cross-repo references and blocks without a header stay scoped as written.
+    const previousName = block.match(STATS_LINE_PATTERN)?.[2].slice(2, -2);
+    let migratedSelector = false;
+    const reviewSelector = (selector?: string) => {
+      if (previousName === undefined) return selector;
+      const portable = portableMcpSelector(selector, previousName);
+      migratedSelector ||= portable !== selector;
+      return portable;
+    };
+    let newBlock =
       replaceFirstInstructionLine(
         block,
         /(?:(?:For (?:regression review of )?)?target branch "(?:[^"\\]|\\.)*": `git fetch origin -- [^`\n]+`; pass `git merge-base [^`\n]+ HEAD`'s SHA|Regression base: (?:PR GitHub `baseRefOid`\/`headRefOid`|exact PR base\/head commits from host metadata); target branch "(?:[^"\\]|\\.)*" via tracking remote\. Fetch both; pass merge-base SHA|For regression review, fetch target branch "(?:[^"\\]|\\.)*" from its remote; compute its merge base with the reviewed HEAD and pass that SHA) to `detect_changes\(\{scope: "compare", base_ref: "<merge-base SHA>"(?:, repo: ("(?:[^"\\`]|\\.)*"))?\}\)`(?: or `([^`\n]+?) detect-changes --scope compare --base-ref "<merge-base SHA>" --repo \.\`)?\./,
-        (_sentence, selector, runner) => regressionReviewGuidance(defaultBranch, runner, selector),
+        (_sentence, selector, runner) =>
+          regressionReviewGuidance(defaultBranch, runner, reviewSelector(selector)),
       ) ??
       replaceFirstInstructionLine(
         block,
         /For regression review: `detect_changes\(\{scope: "compare", base_ref: "(?:[^"\\]|\\.)*"\}\)`(?: or `([^`\n]+?) detect-changes --scope compare --base-ref "(?:[^"\\]|\\.)*" --repo \.\`)?\./,
-        (_sentence, runner) => regressionReviewGuidance(defaultBranch, runner),
+        (_sentence, runner) => regressionReviewGuidance(defaultBranch, runner, reviewSelector()),
       ) ??
       replaceFirstInstructionLine(
         block,
         /^- run detect_changes\(\{scope: "compare", base_ref: "(?:[^"\\]|\\.)*"\}\)[ \t]*$/,
-        () => `- ${regressionReviewGuidance(defaultBranch)}`,
+        () => `- ${regressionReviewGuidance(defaultBranch, undefined, reviewSelector())}`,
       ) ??
       block;
+    if (migratedSelector && !newBlock.includes(MCP_CHECKOUT_GUIDANCE)) {
+      newBlock = newBlock.replace(
+        /^(<!-- gitnexus:start -->)(\r?\n)/,
+        (_match, marker, eol) => `${marker}${eol}${MCP_CHECKOUT_GUIDANCE}${eol}`,
+      );
+    }
     if (newBlock === block) continue; // no base_ref line present, or already current
     const newContent = content.substring(0, startIdx) + newBlock + content.substring(blockEnd);
     try {

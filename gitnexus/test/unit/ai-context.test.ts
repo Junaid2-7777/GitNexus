@@ -95,6 +95,32 @@ describe('kept instruction ownership', () => {
       },
     );
   });
+
+  it.each([
+    ['', ', repo: "<path>"'],
+    [', repo: "OldAlias"', ', repo: "<path>"'],
+    [', repo: "@platform"', ', repo: "@platform"'],
+    [', repo: "/sibling"', ', repo: "/sibling"'],
+  ])(
+    'normalizes stock branch guidance while preserving explicit selector %j',
+    async (before, after) => {
+      const review = (branch: string, selector: string) =>
+        `For regression review, fetch target branch "${branch}" from its remote; compute its merge base with the reviewed HEAD and pass that SHA to \`detect_changes({scope: "compare", base_ref: "<merge-base SHA>"${selector}})\`.`;
+      await withKeptInstructions(
+        `Indexed as **OldAlias**.\n\n${review('main', before)}`,
+        async (directory, file) => {
+          await refreshBaseRefLine(directory, 'develop', { instructionFile: 'AGENTS.md' });
+          const content = await fs.readFile(file, 'utf8');
+          expect(content).toContain(review('develop', after));
+          expect(
+            (await refreshBaseRefLine(directory, 'develop', { instructionFile: 'AGENTS.md' }))
+              .files,
+          ).toEqual([]);
+          expect(await fs.readFile(file, 'utf8')).toBe(content);
+        },
+      );
+    },
+  );
 });
 
 describe('generateAIContextFiles', () => {

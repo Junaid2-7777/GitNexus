@@ -138,33 +138,38 @@ describe('CLI trace command', () => {
     exitSpy.mockRestore();
   });
 
-  it('exits with usage when --depth is non-numeric instead of forwarding NaN', async () => {
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
-      throw new Error('process.exit');
-    });
-    await expect(traceCommand('A', 'B', { depth: 'abc' })).rejects.toThrow('process.exit');
-    expect(exitSpy).toHaveBeenCalledWith(1);
-    expect(callTool).not.toHaveBeenCalled();
-    exitSpy.mockRestore();
+  describe.each(['trace', 'impact'] as const)('CLI %s depth validation', (command) => {
+    it.each(['abc', '1e1', '0x2', '1.5', '-1', '0', '00', '9007199254740992', '09007199254740992'])(
+      'rejects invalid depth %s before backend initialization',
+      async (depth) => {
+        vi.resetModules();
+        init.mockClear();
+        vi.stubEnv('GITNEXUS_LANG', 'en');
+        const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+        const exit = vi.spyOn(process, 'exit').mockImplementation(() => {
+          throw new Error('process.exit');
+        });
+        try {
+          const tool = await import('../../src/cli/tool.js');
+          const run =
+            command === 'trace'
+              ? tool.traceCommand('A', 'B', { depth })
+              : tool.impactCommand('A', { depth });
+          await expect(run).rejects.toThrow('process.exit');
+          expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+          expect(stderr).toHaveBeenCalledWith(
+            expect.stringMatching(/^--depth (must be a positive integer|is too large)/),
+          );
+          expect(init).not.toHaveBeenCalled();
+          expect(callTool).not.toHaveBeenCalled();
+        } finally {
+          exit.mockRestore();
+          stderr.mockRestore();
+          vi.unstubAllEnvs();
+        }
+      },
+    );
   });
-
-  it.each(['1e1', '0x2', '1.5', '-1', '0', '00', '9007199254740992', '09007199254740992'])(
-    'rejects invalid depth %s before starting trace or impact',
-    async (depth) => {
-      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
-        throw new Error('process.exit');
-      });
-      try {
-        await expect(traceCommand('A', 'B', { depth })).rejects.toThrow('process.exit');
-        await expect(impactCommand('A', { depth })).rejects.toThrow('process.exit');
-        expect(exitSpy).toHaveBeenCalledTimes(2);
-        expect(exitSpy).toHaveBeenCalledWith(1);
-        expect(callTool).not.toHaveBeenCalled();
-      } finally {
-        exitSpy.mockRestore();
-      }
-    },
-  );
 
   it.each([
     ['10', 10],

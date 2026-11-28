@@ -80,6 +80,120 @@ describe('kept instruction ownership', () => {
     );
   });
 
+  const keptReview = (branch: string, selector: string) =>
+    'For regression review, fetch target branch "' +
+    branch +
+    '" from its remote; compute its merge base with the reviewed HEAD and pass that SHA to ' +
+    '`detect_changes({scope: "compare", base_ref: "<merge-base SHA>", repo: "' +
+    selector +
+    '"})`.';
+
+  const inlineSnippet = ['Indexed as **Example**.', keptReview('example', 'Example')].join('\n');
+  // A block-quote marker can interrupt an inline comment's paragraph. Only
+  // block comments and code blocks can contain the quoted guidance verbatim.
+  const keptSnippet = [inlineSnippet, checkoutGuidance].join('\n');
+
+  it.each([
+    ['adjacent comments', 'A note <!-- closed --> <!-- open\n' + inlineSnippet + '\n-->'],
+    ['adjacent block comments', '<!-- closed --> <!-- open\n' + inlineSnippet + '\n-->'],
+    ['block comment', '<!-- archived example\n' + keptSnippet + '\n-->'],
+    [
+      'reopened multiline comments',
+      'A note <!-- first\nclosed --> then <!-- second\n' + inlineSnippet + '\n-->',
+    ],
+    ['fence with HTML delimiters', '~~~html <!--\n<!-- example -->\n' + keptSnippet + '\n~~~'],
+    ['multiline code span', 'A literal ``example\n' + inlineSnippet + '\nend``'],
+    [
+      'comment following a literal delimiter',
+      'A literal `<!--`, then <!-- closed --> <!-- another\n' + inlineSnippet + '\n-->',
+    ],
+    [
+      'indented code',
+      keptSnippet
+        .split('\n')
+        .map((line) => '    ' + line)
+        .join('\n'),
+    ],
+    [
+      'quoted code',
+      '> ```markdown\n' +
+        keptSnippet
+          .split('\n')
+          .map((line) => '> ' + line)
+          .join('\n') +
+        '\n> ```',
+    ],
+  ])(
+    'preserves %s while upgrading real instructions on a warm checkout',
+    async (_name, snippet) => {
+      const header = 'Indexed as **OldAlias**.';
+      const review = keptReview('old', 'OldAlias');
+      await withKeptInstructions(
+        [snippet, header, review].join('\n\n'),
+        async (directory, file) => {
+          const before = await fs.readFile(file, 'utf8');
+          await refreshBaseRefLine(directory, 'develop', { instructionFile: 'AGENTS.md' });
+          const expected = before
+            .replace(
+              '<!-- gitnexus:start -->\n',
+              '<!-- gitnexus:start -->\n' + checkoutGuidance + '\n',
+            )
+            .replace(review, keptReview('develop', '<path>'));
+          expect(await fs.readFile(file, 'utf8')).toBe(expected);
+          expect(
+            (await refreshBaseRefLine(directory, 'develop', { instructionFile: 'AGENTS.md' }))
+              .files,
+          ).toEqual([]);
+          expect(await fs.readFile(file, 'utf8')).toBe(expected);
+        },
+      );
+    },
+  );
+
+  it('updates only the live kept header and its stock calls on a full refresh', async () => {
+    const hidden = '~~~~md\n' + keptSnippet + '\n~~~~';
+    const liveHeader = 'Indexed as **OldAlias** (2 symbols,\n3 relationships, 1 execution flows).';
+    const stock =
+      '- For security review, `explain({target: "fileOrSymbol", repo: "OldAlias"})` lists taint findings.';
+    const sibling =
+      '- For security review, `explain({target: "fileOrSymbol", repo: "/sibling"})` lists taint findings.';
+    await withKeptInstructions(
+      [hidden, liveHeader, stock, sibling].join('\n\n'),
+      async (directory, file) => {
+        const args = [
+          directory,
+          path.join(directory, '.gitnexus'),
+          'NewAlias',
+          { nodes: 8, edges: 9, processes: 1 },
+          undefined,
+          { refreshCounts: true, skipSkills: true, instructionFile: 'AGENTS.md' },
+        ] as const;
+        await generateAIContextFiles(...args);
+        const content = await fs.readFile(file, 'utf8');
+        expect(content).toContain(hidden);
+        expect(content).toContain(
+          'Indexed as **NewAlias** (8 symbols, 9 relationships, 1 execution flows).',
+        );
+        expect(content).toContain(
+          checkoutGuidance + '\n\n' + stock.replace('"OldAlias"', '"<path>"'),
+        );
+        expect(content).toContain(sibling);
+        await generateAIContextFiles(...args);
+        expect(await fs.readFile(file, 'utf8')).toBe(content);
+        await refreshStatsLine(
+          directory,
+          { nodes: 12, edges: 13, processes: 4 },
+          { refreshCounts: true, instructionFile: 'AGENTS.md' },
+        );
+        const warm = await fs.readFile(file, 'utf8');
+        expect(warm).toContain(hidden);
+        expect(warm).toContain(
+          'Indexed as **NewAlias** (12 symbols, 13 relationships, 4 execution flows).',
+        );
+      },
+    );
+  });
+
   it('keeps comments opened after prose from intercepting a live branch refresh', async () => {
     const review = (branch: string) =>
       `For regression review, fetch target branch "${branch}" from its remote; compute its merge base with the reviewed HEAD and pass that SHA to \`detect_changes({scope: "compare", base_ref: "<merge-base SHA>", repo: "<path>"})\`.`;

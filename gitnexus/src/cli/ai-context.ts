@@ -6,6 +6,7 @@
  * CLAUDE.md is for Claude Code which only reads that file.
  */
 
+import { fromMarkdown } from 'mdast-util-from-markdown';
 import { GITNEXUS_DIR } from '../storage/storage-constants.js';
 import { storeRootOfCheckoutSlot } from '../storage/shared-store.js';
 import fs from 'fs/promises';
@@ -474,59 +475,77 @@ const GENERATED_MCP_EXAMPLES = [
   ],
 ] as const;
 
-// An HTML opener inside a matched backtick code span is literal.
-function inlineCommentStart(line: string): number {
-  if (!line.includes('<!--')) return -1;
-  const tokens = [...line.matchAll(/(?<!\\)`+|(?<!\\)<!--/g)];
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
-    if (token[0] === '<!--') return token.index ?? -1;
-    const closing = tokens.findIndex((candidate, index) => index > i && candidate[0] === token[0]);
-    if (closing !== -1) i = closing;
+/** Visit source lines that can contain a generated instruction, retaining original Markdown bytes. */
+function mapInstructionProse(
+  section: string,
+  update: (line: string, offset: number) => string,
+): string {
+  const tree = fromMarkdown(section);
+  const literals: { start: number; end: number }[] = [];
+  function collectLiterals(node: typeof tree | (typeof tree.children)[number]): void {
+    const position = node.position;
+    if (
+      position?.start.offset !== undefined &&
+      position.end.offset !== undefined &&
+      (node.type === 'code' ||
+        node.type === 'html' ||
+        (node.type === 'inlineCode' && position.start.line !== position.end.line))
+    ) {
+      // Ordinary one-line code spans contain the stock MCP example itself.
+      let end = position.end.offset;
+      if (node.type === 'html' && node.value.startsWith('<!--')) {
+        // A CommonMark HTML block ends on the line containing the first close.
+        // Its raw HTML can open another comment on that very same line.
+        const close = node.value.lastIndexOf('-->');
+        if (close >= 0 && /^[^<]*<!--/.test(node.value.slice(close + 3))) {
+          const nextClose = section.indexOf('-->', end);
+          end = nextClose === -1 ? section.length : nextClose + 3;
+        }
+      }
+      literals.push({ start: position.start.offset, end });
+    } else if ('children' in node) {
+      node.children.forEach(collectLiterals);
+    }
   }
-  return -1;
+  collectLiterals(tree);
+
+  let next = 0;
+  return section.replace(/[^\r\n]+/g, (line, offset: number) => {
+    while (next < literals.length && literals[next].end <= offset) next++;
+    const literal = literals[next];
+    if (!literal || literal.start >= offset + line.length) return update(line, offset);
+    // A fragment after a literal on this line is never the start of a stock instruction.
+    const end = Math.max(0, literal.start - offset);
+    return end ? update(line.slice(0, end), offset) + line.slice(end) : line;
+  });
 }
 
-/** Apply edits to prose lines, preserving fences, comments and original endings. */
-function mapInstructionProse(section: string, update: (line: string) => string): string {
-  let fence: { delimiter: string; quotes: number; inside?: RegExp } | undefined;
-  let inComment = false;
-  return section.replace(/[^\r\n]+/g, (line) => {
-    if (fence?.inside && line.trim() !== '' && !fence.inside.test(line)) {
-      fence = undefined;
-    }
-    const marker = FENCE_OPENER.exec(line);
-    const prefix = marker?.[1] ?? '';
-    const quotes = prefix.split('>').length - 1;
-    if (fence) {
-      if (
-        marker &&
-        quotes === fence.quotes &&
-        /^[> \t]*$/.test(prefix) &&
-        marker[2][0] === fence.delimiter[0] &&
-        marker[2].length >= fence.delimiter.length &&
-        !marker[3].trim()
-      ) {
-        fence = undefined;
+/** The counts can wrap; match their original spelling starting at the first live header. */
+function instructionHeader(section: string) {
+  let header: { match: RegExpExecArray; before: string; after: string } | undefined;
+  mapInstructionProse(section, (line, offset) => {
+    if (!header && STATS_LINE_PATTERN.test(line)) {
+      const match = STATS_LINE_PATTERN.exec(section.slice(offset));
+      if (match?.index === 0) {
+        header = {
+          match,
+          before: section.slice(0, offset),
+          after: section.slice(offset + match[0].length),
+        };
       }
-      return line;
     }
-    if (!inComment && marker && (marker[2][0] !== '`' || !marker[3].includes('`'))) {
-      const inside = quotes
-        ? new RegExp(`^(?: {0,3}>[ \t]?){${quotes}}`)
-        : prefix
-          ? new RegExp(`^ {${line.indexOf(marker[2])}}`)
-          : undefined;
-      fence = { delimiter: marker[2], quotes, inside };
-      return line;
-    }
-    const opener = inComment ? 0 : inlineCommentStart(line);
-    if (opener !== -1) {
-      inComment = !line.includes('-->', inComment ? 0 : opener + 4);
-      return opener === 0 ? line : update(line.slice(0, opener)) + line.slice(opener);
-    }
-    return update(line);
+    return line;
   });
+  return header;
+}
+
+function hasCheckoutGuidance(section: string): boolean {
+  let found = false;
+  mapInstructionProse(section, (line) => {
+    found ||= line.startsWith(MCP_CHECKOUT_GUIDANCE);
+    return line;
+  });
+  return found;
 }
 
 /** Preserve explicitly selected siblings and groups in kept instructions. */
@@ -693,21 +712,19 @@ async function upsertGitNexusSection(
       // The parenthetical is optional so a count-free line left by a prior
       // --no-stats run still matches — letting the name refresh, and letting
       // counts return if --no-stats is later dropped.
-      const statsMatch = existingSection.match(STATS_LINE_PATTERN);
+      const header = instructionHeader(existingSection);
       let updatedSection = existingSection;
 
-      if (statsMatch) {
-        const statsPrefix = statsMatch[1];
-        const customParenthetical =
-          !statsMatch[3] &&
-          /^\s*\(/.test(existingSection.slice(statsMatch.index! + statsMatch[0].length));
+      if (header) {
+        const statsPrefix = header.match[1];
+        const customParenthetical = !header.match[3] && /^\s*\(/.test(header.after);
         const statsLine =
           noStats || customParenthetical
             ? `${statsPrefix} **${projectName}**`
             : `${statsPrefix} **${projectName}** (${newStatsInner})`;
-        updatedSection = existingSection.replace(STATS_LINE_PATTERN, () => statsLine);
+        updatedSection = header.before + statsLine + header.after;
       }
-      const previousName = statsMatch?.[2].slice(2, -2);
+      const previousName = header?.match[2].slice(2, -2);
       updatedSection = refreshKeptMcpSelectors(updatedSection, previousName);
       // Background refreshes preserve count-only changes in lean blocks (#2907).
       if (comparable(updatedSection) === comparable(existingSection)) {
@@ -1095,7 +1112,7 @@ export async function refreshBaseRefLine(
     const block = content.substring(startIdx, blockEnd);
     // Use the managed header as evidence of the former generated alias.
     // Explicit cross-repo references and blocks without a header stay scoped as written.
-    const previousName = block.match(STATS_LINE_PATTERN)?.[2].slice(2, -2);
+    const previousName = instructionHeader(block)?.match[2].slice(2, -2);
     let migratedSelector = false;
     const reviewSelector = (selector?: string) => {
       if (previousName === undefined) return selector;
@@ -1121,7 +1138,7 @@ export async function refreshBaseRefLine(
         () => `- ${regressionReviewGuidance(defaultBranch, undefined, reviewSelector())}`,
       ) ??
       block;
-    if (migratedSelector && !newBlock.includes(MCP_CHECKOUT_GUIDANCE)) {
+    if (migratedSelector && !hasCheckoutGuidance(newBlock)) {
       newBlock = newBlock.replace(
         /^(<!-- gitnexus:start -->)(\r?\n)/,
         (_match, marker, eol) => `${marker}${eol}${MCP_CHECKOUT_GUIDANCE}${eol}`,
@@ -1194,29 +1211,27 @@ export async function refreshStatsLine(
     if (endIdx === -1 || endIdx <= startIdx) continue;
     const blockEnd = endIdx + GITNEXUS_END_MARKER.length;
     const block = content.substring(startIdx, blockEnd);
-    let newBlock = block.replace(
-      STATS_LINE_PATTERN,
-      (
-        match,
-        prefix: string,
-        project: string,
-        existingCounts: string | undefined,
-        offset: number,
-      ) => {
-        // An unrecognized parenthetical may already contain counts. Do not
-        // prepend a second tuple just because the optional capture missed it.
-        if (existingCounts === undefined && /^\s*\(/.test(block.slice(offset + match.length))) {
-          return match;
+    const header = instructionHeader(block);
+    let newBlock = block;
+    if (header) {
+      const [original, prefix, project, existingCounts] = header.match;
+      // An unrecognized parenthetical may already contain counts.
+      let replacement = original;
+      if (existingCounts !== undefined || !/^\s*\(/.test(header.after)) {
+        if (noStats) replacement = prefix + ' ' + project;
+        else if (existingCounts === undefined)
+          replacement = prefix + ' ' + project + ' (' + counts + ')';
+        else if (options?.refreshCounts) {
+          const values = [stats.nodes, stats.edges ?? 0, stats.processes ?? 0];
+          let i = 0;
+          replacement =
+            prefix + ' ' + project + existingCounts.replace(/\d+/g, () => String(values[i++]));
         }
-        if (noStats) return `${prefix} ${project}`;
-        if (existingCounts === undefined) return `${prefix} ${project} (${counts})`;
-        if (!options?.refreshCounts) return match;
-        const values = [stats.nodes, stats.edges ?? 0, stats.processes ?? 0];
-        let i = 0;
-        return `${prefix} ${project}${existingCounts.replace(/\d+/g, () => String(values[i++]))}`;
-      },
-    );
-    if (noStats) newBlock = newBlock.replace(skillCountPattern, '$1');
+      }
+      newBlock = header.before + replacement + header.after;
+    }
+    if (noStats)
+      newBlock = mapInstructionProse(newBlock, (line) => line.replace(skillCountPattern, '$1'));
     if (newBlock === block) continue;
     const newContent = content.substring(0, startIdx) + newBlock + content.substring(blockEnd);
     try {

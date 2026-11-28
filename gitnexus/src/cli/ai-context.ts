@@ -188,6 +188,14 @@ function quoteMcpRepo(repo: string): string {
   return JSON.stringify(repo).replace(/`/g, '\\u0060');
 }
 
+function generatedMcpRepo(projectName: string): string {
+  // `@` selects a cross-repo group for several MCP tools. The checkout path
+  // returned by list_repos selects the repo without baking a host path into docs.
+  return quoteMcpRepo(
+    projectName.startsWith('@') ? '<absolute checkout path from list_repos>' : projectName,
+  );
+}
+
 export function generateGitNexusContent(
   projectName: string,
   stats: RepoStats,
@@ -234,7 +242,7 @@ ${tableBody}`
   // stay under the CLAUDE.md block token budget (#856); the cli skill carries the
   // full bootstrap + npm-11 fallback (`node.target is null` npx install crash).
   const runner = `node ${runnerPath}`;
-  const mcpRepo = quoteMcpRepo(projectName);
+  const mcpRepo = generatedMcpRepo(projectName);
   // Bootstrap names every install-free one-shot rather than the one this machine
   // resolves to: the block is committed, so a host-specific command would make
   // two contributors on different package managers rewrite it at each other on
@@ -616,11 +624,21 @@ async function upsertGitNexusSection(
           noStats || customParenthetical
             ? `${statsPrefix} **${projectName}**`
             : `${statsPrefix} **${projectName}** (${newStatsInner})`;
-        const updatedSection = refreshKeptMcpSelectors(
+        const previousName = statsMatch[2].slice(2, -2);
+        const nextSelector = generatedMcpRepo(projectName);
+        let updatedSection = refreshKeptMcpSelectors(
           existingSection.replace(STATS_LINE_PATTERN, () => statsLine),
-          quoteMcpRepo(statsMatch[2].slice(2, -2)),
-          quoteMcpRepo(projectName),
+          generatedMcpRepo(previousName),
+          nextSelector,
         );
+        if (previousName.startsWith('@')) {
+          // Also migrate older generated blocks which embedded the raw group-like alias.
+          updatedSection = refreshKeptMcpSelectors(
+            updatedSection,
+            quoteMcpRepo(previousName),
+            nextSelector,
+          );
+        }
         // Background refreshes preserve count-only changes in lean blocks (#2907).
         if (comparable(updatedSection) === comparable(existingSection)) {
           return repairLineEndings();

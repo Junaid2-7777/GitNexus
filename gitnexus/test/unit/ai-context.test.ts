@@ -254,6 +254,46 @@ describe('generateAIContextFiles', () => {
     expect((await refreshBaseRefLine(tmpDir, 'develop')).files).toEqual([]);
   });
 
+  it.each([false, true])(
+    'uses the checkout path for a group-like registry name (PDG: %s)',
+    (hasPdg) => {
+      const content = generateGitNexusContent('@team', {}, { hasPdg, skipSkills: true });
+      expect(content).toContain('indexed by GitNexus as **@team**');
+      expect(content).not.toContain('repo: "@team"');
+      expect(content.split('repo: "<absolute checkout path from list_repos>"')).toHaveLength(
+        hasPdg ? 9 : 7,
+      );
+    },
+  );
+
+  it('migrates reserved selectors in kept blocks and refreshes them on a later rename', async () => {
+    const source = generateGitNexusContent('OldAlias', {});
+    const localNote = 'Our group configuration uses `repo: "@team"`.';
+    const legacyBlock = source
+      .replace('**OldAlias**', '**@team**')
+      .replaceAll('repo: "OldAlias"', 'repo: "@team"')
+      .replace(
+        '<!-- gitnexus:start -->',
+        `<!-- gitnexus:start -->\n<!-- gitnexus:keep -->\n${localNote}`,
+      );
+    const file = path.join(tmpDir, 'AGENTS.md');
+    await fs.writeFile(file, legacyBlock);
+
+    await generateAIContextFiles(tmpDir, storagePath, '@team', {});
+    const migrated = await fs.readFile(file, 'utf8');
+    expect(migrated).toContain('indexed by GitNexus as **@team**');
+    expect(migrated).toContain(localNote);
+    expect(migrated.split('repo: "@team"')).toHaveLength(2);
+    expect(migrated.split('repo: "<absolute checkout path from list_repos>"')).toHaveLength(7);
+
+    await generateAIContextFiles(tmpDir, storagePath, 'NewAlias', {});
+    const renamed = await fs.readFile(file, 'utf8');
+    expect(renamed).toContain('indexed by GitNexus as **NewAlias**');
+    expect(renamed).toContain(localNote);
+    expect(renamed).not.toContain('<absolute checkout path from list_repos>');
+    expect(renamed.split('repo: "NewAlias"')).toHaveLength(7);
+  });
+
   it.each([true, false])('exempts docs-only edits when hasPdg=%s (#3976)', (hasPdg) => {
     const content = generateGitNexusContent('ScopeProject', { nodes: 50 }, { hasPdg });
     const alwaysDo = content.slice(content.indexOf('## Always Do'), content.indexOf('## Never Do'));
